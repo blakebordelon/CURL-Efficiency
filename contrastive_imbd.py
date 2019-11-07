@@ -6,7 +6,7 @@ import re
 import csv
 from sklearn.feature_extraction.text import CountVectorizer
 import timeit
-
+import matplotlib.pyplot as plt
 
 OLDPATH = '../aclImdb_v1.tar/aclImdb/train/unsup/'
 PATH = '../formatted_data/'
@@ -60,6 +60,9 @@ def collect_all_data(num_data):
 
     return all_data
 
+
+
+
 def save_formatted(formatted_data):
 
     with open(PATH + 'formatted_data.txt', 'w') as f:
@@ -107,8 +110,15 @@ def sample_similar_words(neg_samples):
     for k in range(neg_samples):
         xm[k,:] = sentence[np.random.randint(0, len(sentence))]
     xm.type(torch.long)
-    return x,xp,xm
+    xf = torch.zeros(review_lang.n_words)
+    xfp = torch.zeros(review_lang.n_words)
+    xfm = torch.zeros((neg_samples, review_lang.n_words))
 
+    xf[x] = 1
+    xfp[xp] = 1
+    xfm[:,xm[:,0].type(torch.long)] = torch.ones(neg_samples)
+
+    return xf,xfp,xfm
 
 input_dim = review_lang.n_words
 class CURL_Embedding(nn.Module):
@@ -119,46 +129,51 @@ class CURL_Embedding(nn.Module):
 
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
-        self.embedding = nn.Embedding(input_dim , hidden_dim)
-        self.first = nn.Linear(hidden_dim, hidden_dim)
+        #self.embedding = nn.Embedding(input_dim , hidden_dim)
+        self.first = nn.Linear(input_dim, hidden_dim)
         self.relu = nn.ReLU(inplace = False)
         self.second = nn.Linear(hidden_dim, hidden_dim)
 
     def forward(self, x):
-        return self.relu(self.second(self.relu(self.first(self.embedding(x)))))
-
+        #return self.relu(self.second(self.relu(self.first(self.embedding(x)))))
+        return self.relu(self.second(self.relu(self.first(x))))
 
 print(all_tensor_data[0].shape)
-hidden_dim = 500
+hidden_dim = 20
 lr = 1e-3
-iter = 1000
+iter = 200
 neg_samples = 10
-
+batch_size = 100
 model = CURL_Embedding(input_dim, hidden_dim)
 optimizer = optim.Adam(model.parameters(), lr = lr)
 all_losses = []
 for t in range(iter):
     print("t = %d" % t)
-    x,xp, xm = sample_similar_words(neg_samples)
-    print(x.shape)
-    print(xp.shape)
-    print(xm.shape)
+
+    x_b = torch.zeros((batch_size, input_dim))
+    xp_b = torch.zeros((batch_size, input_dim))
+    xm_b = torch.zeros((batch_size, neg_samples,input_dim))
+    for b in range(batch_size):
+        x_b[b,:],xp_b[b,:], xm_b[b,:,:] = sample_similar_words(neg_samples)
+
 
     with torch.autograd.set_detect_anomaly(False):
 
         #x = torch.tensor(0).type(torch.long)
         start_forward = timeit.default_timer()
-        forwardx = model.forward(x.type(torch.long)).squeeze()
-        forwardxp = model.forward(xp.type(torch.long)).squeeze()
-        #loss = 0.0
-        #for k in range(neg_samples):
-        forward_k = model.forward(xm[0,:].type(torch.long)).squeeze()
-        print(forward_k.shape)
-        print(forwardx.shape)
-        loss = torch.log(1+torch.exp( torch.dot(forwardx, forward_k) - torch.dot(forwardx, forwardxp)  )).sum()
+        forwardx = model.forward(x_b).squeeze()
+        forwardxp = model.forward(xp_b).squeeze()
+        loss = 0.0
+
+        for k in range(neg_samples):
+            forward_k = model.forward(xm_b[:,k,:]).squeeze()
+            for b in range(batch_size):
+                loss += 1/batch_size * torch.log(1 + torch.exp( torch.dot(forwardx[b,:], forward_k[b,:]) - torch.dot(forwardx[b,:], forwardxp[b,:])  )).sum()
+
         end_forward = timeit.default_timer()
 
         loss.backward()
+
         print("loss: %lf" % loss)
         end_back = timeit.default_timer()
         optimizer.step()
@@ -170,4 +185,9 @@ for t in range(iter):
 
 plt.plot(all_losses)
 plt.xlabel('iteration')
-plt.ylabel('Loss')
+plt.ylabel('Contrastive Loss')
+plt.savefig('contrastive_loss.pdf')
+plt.show()
+
+
+# To do: train a linear classifier on the output: Need to load labeled data
