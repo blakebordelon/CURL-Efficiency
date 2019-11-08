@@ -41,6 +41,7 @@ def tensor_from_str(sentence, lang):
     return torch.tensor(indexes, dtype=torch.long).view(-1, 1)
 
 
+
 review_lang = Lang('review_lang')
 
 
@@ -191,3 +192,10 @@ plt.show()
 
 
 # To do: train a linear classifier on the output: Need to load labeled data
+
+reviews_train = []
+for line in open('../aclImdb_v1.tar/aclImdb/movie_data/full_train.txt', 'r'):
+    reviews_train.append(line.strip())
+
+reviews_train = preprocess(reviews_train)
+target = [1 if i < 12500 else 0 for i in range(25000)]
