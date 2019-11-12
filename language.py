@@ -3,10 +3,11 @@ import string
 class Lang:
 
     def __init__(self):
-        self.word_counts = {}
+        self.word2count = {}
         self.n_words = 0
-        self.word_index = {}
-        self.index_to_word = []
+        self.word2index = {}
+        self.index2word = {0: "SOS", 1: "EOS"}
+        self.n_words = 2 
         return
 
     def addSentence(self, sentence):
