@@ -9,6 +9,8 @@ from torchvision import datasets, transforms
 from torch.optim.lr_scheduler import StepLR
 from tqdm import tqdm
 
+import PIL
+
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -41,7 +43,10 @@ def show_random(trainloader):
 if __name__ == '__main__':
 
     normalize = transforms.Compose(
-                                   [transforms.ToTensor(),
+                                   [
+                                    transforms.ColorJitter(brightness=0.3,contrast=0.4,saturation=0.3,hue=0.3),
+                                    transforms.RandomAffine(10, scale=(0.9,1.1),shear=10, resample=PIL.Image.BICUBIC, fillcolor=(100,100,100)),
+                                    transforms.ToTensor(),
                                     transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
                                     ]
                                    )
