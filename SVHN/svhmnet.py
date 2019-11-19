@@ -29,6 +29,7 @@ class Net_Bulk(nn.Module):
         self.pool = nn.MaxPool2d(2, 2)
         self.conv2 = nn.Conv2d(6, 16, 5)
         self.fc1 = nn.Linear(16*5*5,120)
+        self.fc2 = nn.Linear(120,15)
 
     def forward(self, x):
         x = self.pool(F.relu(self.conv1(x)))
@@ -36,17 +37,16 @@ class Net_Bulk(nn.Module):
         # TODO check what these dimensions mean
         x = x.view(-1, 16 * 5 * 5)
         x = F.relu(self.fc1(x))
+        x = torch.tanh(self.fc2(x))
         return x
 
 class Net_Head(nn.Module):
     def __init__(self):
         super(Net_Head, self).__init__()
-        self.fc2 = nn.Linear(120,84)
-        self.fc3 = nn.Linear(84,10)
+        self.fc3 = nn.Linear(15,10)
         self.logsoftmax = nn.LogSoftmax(dim=-1)
 
     def forward(self, x):
-        x = F.relu(self.fc2(x))
         x = self.fc3(x)
         x = self.logsoftmax(x)
         return x
@@ -64,7 +64,7 @@ class Net_Full(nn.Module):
 
 
 class Train_Sup():
-    def __init__(self, svhn_path, frac=0.5, shuffle=True, augment=True, use_cuda=False):
+    def __init__(self, svhn_path, frac=0.5, shuffle=True, augment=True, use_cuda=False, dload_dataset=False):
         """
         frac : float
             fraction of dataset to use for training
@@ -116,13 +116,12 @@ class Train_Sup():
     def train(self, batch_size=8, epochs=10, loss_freq=1, test_freq=10000):
         self.net.train()
         trainloader = torch.utils.data.DataLoader(self.trainset, batch_size=batch_size, sampler=self.train_sampler, num_workers=2)
-        testloader = torch.utils.data.DataLoader(testset, batch_size=8, shuffle=False, num_workers=2)
+        testloader = torch.utils.data.DataLoader(self.testset, batch_size=8, shuffle=False, num_workers=2)
 
         criterion = nn.NLLLoss()
         optimizer = optim.SGD(self.net.parameters(), lr=0.001, momentum=0.9)
         train_losses = []
         bnum = 0
-        #t = tqdm(leave=True, total=len(epochs*len(trainloader)))
         t = tqdm(leave=True, total=epochs*len(trainloader))
         for epoch in range(epochs):
             for i, data in enumerate(trainloader):
@@ -132,8 +131,8 @@ class Train_Sup():
                     total = 0
                     with torch.no_grad():
                         for data in testloader:
-                            images, labels = data[0].to(trainsup.device), data[1].to(trainsup.device)
-                            outputs = trainsup.net(images)
+                            images, labels = data[0].to(self.device), data[1].to(self.device)
+                            outputs = self.net(images)
                             _, predicted = torch.max(outputs.data, 1)
                             total += labels.size(0)
                             correct += (predicted == labels).sum().item()
@@ -164,12 +163,13 @@ class Train_Sup():
 
 
 class ContrastedData(datasets.SVHN):
-    def __init__(self, root, split='train', contrast_transform=None, k=1, 
+    def __init__(self, root, split='train', accepted_indices=None, contrast_transform=None, k=1, 
                  transform=None, target_transform=None, download=False):
         super(ContrastedData, self).__init__(root, split=split, transform=transform,  
                                              target_transform=target_transform, download=download)
         self.contrast_transform = contrast_transform
         self.k = k
+        self.accepted_indices = accepted_indices
         if transform is None:
             print("Warning - a transform must be provided, at the very least transform.ToTensor()")
             print("After transformation, the result should be a tensor.")
@@ -179,6 +179,7 @@ class ContrastedData(datasets.SVHN):
         targets = []  # We actually shouldn't be using the target for CURL anyways
         # Create original
         img_base, target_base = self.data[index], int(self.labels[index])
+        target = target_base
         imgx = Image.fromarray(np.transpose(img_base, (1, 2, 0)))
         if self.transform is not None:
             imgx = self.transform(imgx)
@@ -189,7 +190,7 @@ class ContrastedData(datasets.SVHN):
         targets.append(target)
         # Create similar
         imgxp, targetp = img_base, target_base
-        imgxp = Image.fromarray(np.transpose(img, (1, 2, 0)))
+        imgxp = Image.fromarray(np.transpose(imgxp, (1, 2, 0)))
         if self.contrast_transform is not None:
             imgxp = self.contrast_transform(imgxp)
         if self.target_transform is not None:
@@ -198,7 +199,10 @@ class ContrastedData(datasets.SVHN):
         targets.append(targetp)
         # Create contrasted
         for i in range(self.k):
-            randind = np.random.randint(len(self.data))
+            if self.accepted_indices is not None:
+                randind = np.random.choice(self.accepted_indices)
+            else:
+                randind = np.random.randint(len(self.data))
             img, targ = self.data[randind], int(self.labels[randind])
             img = Image.fromarray(np.transpose(img, (1, 2, 0)))
             if self.transform is not None:
@@ -213,14 +217,26 @@ class ContrastedData(datasets.SVHN):
 
 # TODO
 class Train_CURL():
-    def __init__(self, svhn_path, augment=False, use_cuda=False):
+    def __init__(self, svhn_path, curlfrac=0.5, supfrac=0.5, k=1, shuffle=True, augment=False, use_cuda=False, dload_dataset=False):
+        self.k = k
+        self.leakyrelu = nn.LeakyReLU(negative_slope=0.01)
         self.bulk = Net_Bulk()
         self.head = Net_Head()
         normalize = transforms.Compose(
                      [transforms.ToTensor(),
                       transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
                      ])
+        augcolor = [transforms.ColorJitter(brightness=0.5,contrast=0.5,saturation=0.5,hue=0.5)]
+        augaffine = [transforms.RandomAffine(20, scale=(0.9,1.1),shear=20, 
+                                                 resample=PIL.Image.BICUBIC, fillcolor=(100,100,100))]
         augtrans = transforms.Compose(
+                    [
+                     transforms.RandomApply(augcolor, p=0.8),
+                     transforms.RandomApply(augcolor, p=0.8),
+                     transforms.ToTensor(),
+                     transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+                     ])
+        contrasttrans = transforms.Compose(
                     [
                      transforms.ColorJitter(brightness=0.5,contrast=0.5,saturation=0.5,hue=0.5),
                      transforms.RandomAffine(20, scale=(0.9,1.1),shear=20, 
@@ -232,8 +248,28 @@ class Train_CURL():
             transform = augtrans
         else:
             transform = normalize
-        trainset = ContrastedData(svhn_path, split='train', contrast_transform=augtrans, transform=transform, download=dload_dataset)
-        self.trainset = trainset
+        self.suptrainset = datasets.SVHN(svhn_path, split='train', transform=transform, target_transform=None, download=dload_dataset)
+        self.testset = datasets.SVHN(svhn_path, split='test', transform=normalize, target_transform=None, download=dload_dataset)
+
+        if curlfrac + supfrac > 1.0:
+            print("CURL fraction plus SUP fraction cannot exceed 1")
+            print("Setting to defaults")
+            curlfrac, supfrac = 0.5, 0.5
+        trainset_size = len(self.suptrainset)
+        indices = list(range(trainset_size))
+        end = int(np.floor((curlfrac+supfrac) * trainset_size))
+        curlend = int(np.floor(curlfrac/(supfrac + curlfrac) * end))
+        if shuffle:
+            np.random.shuffle(indices)
+        curltrain_indices = indices[:curlend]
+        suptrain_indices = indices[curlend:end]
+        print(f"Number of labeled images: {len(suptrain_indices)}")
+        print(f"Number of unlabeled images: {len(curltrain_indices)}")
+        self.suptrain_sampler = SubsetRandomSampler(suptrain_indices)
+        self.curltrain_sampler = SubsetRandomSampler(curltrain_indices)
+
+        self.curltrainset = ContrastedData(svhn_path, split='train', accepted_indices=curltrain_indices, contrast_transform=contrasttrans, k=k, transform=transform, download=dload_dataset)
+
         if use_cuda:
             if torch.cuda.is_available():
                 self.device = torch.device('cuda')
@@ -245,23 +281,58 @@ class Train_CURL():
         self.bulk.to(self.device)
         self.head.to(self.device)
 
-    def trainbulk(self, batch_size=8, epochs=10, loss_freq=1):
+    def curltrain(self, batch_size=8, epochs=10, loss_freq=1):
         self.bulk.train()
-        self.trainloader = torch.utils.data.DataLoader(self.trainset, batch_size=batch_size, shuffle=True, num_workers=2)
-        optimizer = optim.SGD(self.bulk.parameters(), lr=0.001, momentum=0.9)
+        trainloader = torch.utils.data.DataLoader(self.curltrainset, batch_size=batch_size, sampler=self.curltrain_sampler, num_workers=2)
+
+        optimizer = optim.SGD(self.bulk.parameters(), lr=0.0001, momentum=0.3)
         train_losses = []
+        bnum = 0
+        t = tqdm(leave=True, total=epochs*len(trainloader))
         for epoch in range(epochs):
-            t = tqdm(self.trainloader, leave=False, total=len(self.trainloader))
-            for i, data in enumerate(t):
+            for i, data in enumerate(trainloader):
                 # get the inputs; data is a list of [inputs, labels]
-                inputs, labels = data[0].to(self.device), data[1].to(self.device)
+                # labels not used, this part is unsupervised
+                inputs = data[0].to(self.device)
 
                 # zero the parameter gradients
                 optimizer.zero_grad()
 
-                # forward + backward + optimize
-                outputs = self.net(inputs)
-                loss = criterion(outputs, labels)
+                # The following can probably be done better by make a superbatch
+                # where we do all the passes simultaneously, probably by flattening
+                # x, x+, x- into the minibatch, and reshaping after
+
+                #  # First we send through the main sample x
+                #  outputx = self.bulk(inputs[:,0])
+                #  # Next send the similar one x+
+                #  outputp = self.bulk(inputs[:,1])
+                #  # Note that batched dot product x^t x is just x*x.sum(-1)
+                #  sim = ((outputx*outputp).sum(-1))# / outputx.shape[-1]
+                #  # Finally the remainders
+                #  contrast = torch.zeros_like(sim)
+                #  for i in range(self.k):
+                #      output = self.bulk(inputs[:,2+i])
+                #      contrast += ((outputx*output).sum(-1))# / outputx.shape[-1]
+
+                #  minibatched_loss = self.leakyrelu((contrast-0.1*sim))
+
+                # First we send through the main sample x
+                outputx = self.bulk(inputs[:,0])
+                # Next send the similar one x+
+                outputp = self.bulk(inputs[:,1])
+                # Note that batched dot product x^t x is just x*x.sum(-1)
+                sim = (((outputx-outputp)**2).sum(-1)) / (4*outputx.shape[-1])
+                # Finally the remainders
+                contrast = torch.zeros_like(sim)
+                for i in range(self.k):
+                    output = self.bulk(inputs[:,2+i])
+                    contrast += (((outputx-output)**2).sum(-1)) / (4*outputx.shape[-1])
+
+                minibatched_loss = sim - contrast
+
+                #print(contrast)
+                #print(sim)
+                loss = torch.mean(minibatched_loss)
                 loss.backward()
                 optimizer.step()
 
@@ -269,19 +340,37 @@ class Train_CURL():
                 loss_val = loss.cpu().item()
                 if i % loss_freq == 0:
                     train_losses.append(loss_val)
+                t.update()
                 t.set_postfix(epoch=f'{epoch}/{epochs-1}', loss=f'{loss_val:.2e}')
-        self.net.eval()
+        t.close()
+        self.bulk.eval()
         return train_losses
 
-    def trainhead(self, batch_size=8, epochs=10, loss_freq=1):
-        self.net.train()
-        self.trainloader = torch.utils.data.DataLoader(self.trainset, batch_size=batch_size, shuffle=True, num_workers=2)
+    def suptrain(self, batch_size=8, epochs=10, loss_freq=1, test_freq=1000):
+        self.head.train()
+        trainloader = torch.utils.data.DataLoader(self.suptrainset, batch_size=batch_size, sampler=self.suptrain_sampler, num_workers=2)
+        testloader = torch.utils.data.DataLoader(self.testset, batch_size=8, shuffle=False, num_workers=2)
         criterion = nn.NLLLoss()
-        optimizer = optim.SGD(self.net.parameters(), lr=0.001, momentum=0.9)
+        optimizer = optim.SGD(self.head.parameters(), lr=0.001, momentum=0.9)
         train_losses = []
+        t = tqdm(leave=True, total=epochs*len(trainloader))
+        bnum = 0
         for epoch in range(epochs):
-            t = tqdm(self.trainloader, leave=False, total=len(self.trainloader))
-            for i, data in enumerate(t):
+            for i, data in enumerate(trainloader):
+
+                if bnum % test_freq == 0:
+                    correct = 0
+                    total = 0
+                    with torch.no_grad():
+                        for data in testloader:
+                            images, labels = data[0].to(self.device), data[1].to(self.device)
+                            outputs = self.bulk(images)
+                            outputs = self.head(outputs)
+                            _, predicted = torch.max(outputs.data, 1)
+                            total += labels.size(0)
+                            correct += (predicted == labels).sum().item()
+                    print(f'Epoch {epoch}: test accuracy = {100 * correct/total}')
+
                 # get the inputs; data is a list of [inputs, labels]
                 inputs, labels = data[0].to(self.device), data[1].to(self.device)
 
@@ -289,7 +378,8 @@ class Train_CURL():
                 optimizer.zero_grad()
 
                 # forward + backward + optimize
-                outputs = self.net(inputs)
+                outputs = self.bulk(inputs)
+                outputs = self.head(outputs)
                 loss = criterion(outputs, labels)
                 loss.backward()
                 optimizer.step()
@@ -298,8 +388,63 @@ class Train_CURL():
                 loss_val = loss.cpu().item()
                 if i % loss_freq == 0:
                     train_losses.append(loss_val)
-                t.set_postfix(epoch=f'{epoch}/{epochs-1}', loss=f'{loss_val:.2e}')
-        self.net.eval()
+                bnum += 1
+                t.update()
+                t.set_postfix(epoch=f'{epoch}', loss=f'{loss_val:.2e}')
+        t.close()
+        self.head.eval()
+        return train_losses
+
+    def train(self, batch_size=8, epochs=10, loss_freq=1, test_freq=10000):
+        self.bulk.train()
+        self.head.train()
+        trainloader = torch.utils.data.DataLoader(self.suptrainset, batch_size=batch_size, sampler=self.suptrain_sampler, num_workers=2)
+        testloader = torch.utils.data.DataLoader(self.testset, batch_size=8, shuffle=False, num_workers=2)
+
+        criterion = nn.NLLLoss()
+        optimizer = optim.SGD(list(self.bulk.parameters()) + list(self.head.parameters()), lr=0.001, momentum=0.9)
+        train_losses = []
+        bnum = 0
+        t = tqdm(leave=True, total=epochs*len(trainloader))
+        for epoch in range(epochs):
+            for i, data in enumerate(trainloader):
+
+                if bnum % test_freq == 0:
+                    correct = 0
+                    total = 0
+                    with torch.no_grad():
+                        for data in testloader:
+                            images, labels = data[0].to(self.device), data[1].to(self.device)
+                            outputs = self.bulk(images)
+                            outputs = self.head(outputs)
+                            _, predicted = torch.max(outputs.data, 1)
+                            total += labels.size(0)
+                            correct += (predicted == labels).sum().item()
+                    print(f'Epoch {epoch}: test accuracy = {100 * correct/total}')
+
+                # get the inputs; data is a list of [inputs, labels]
+                inputs, labels = data[0].to(self.device), data[1].to(self.device)
+
+                # zero the parameter gradients
+                optimizer.zero_grad()
+
+                # forward + backward + optimize
+                outputs = self.bulk(inputs)
+                outputs = self.head(outputs)
+                loss = criterion(outputs, labels)
+                loss.backward()
+                optimizer.step()
+
+                # record loss
+                loss_val = loss.cpu().item()
+                if i % loss_freq == 0:
+                    train_losses.append(loss_val)
+                bnum += 1
+                t.update()
+                t.set_postfix(epoch=f'{epoch}', loss=f'{loss_val:.2e}')
+        t.close()
+        self.bulk.eval()
+        self.head.eval()
         return train_losses
 
 
@@ -328,8 +473,9 @@ if __name__ == '__main__':
                                     ]
                                    )
 
-    testset = datasets.SVHN(svhn_path, split='test', transform=normalize, target_transform=None, download=dload_dataset)
-    testloader = torch.utils.data.DataLoader(testset, batch_size=8, shuffle=False, num_workers=2)
-
-    trainsup = Train_Sup(svhn_path, frac=0.1, shuffle=True, augment=True, use_cuda=True)
-    trainsup.train(epochs=40)
+    #trainsup = Train_Sup(svhn_path, frac=0.01, shuffle=True, augment=True, use_cuda=True)
+    #trainsup.train(epochs=100, test_freq=2000)
+    traincurl = Train_CURL(svhn_path, curlfrac=0.3, supfrac=0.005, k=1, shuffle=True, augment=False, use_cuda=True)
+    traincurl.train(epochs=200, batch_size=5,  test_freq=2000)
+    traincurl.curltrain(epochs=2, batch_size=10)
+    traincurl.suptrain(epochs=300, batch_size=5,  test_freq=2000)
