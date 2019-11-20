@@ -244,6 +244,7 @@ class TrainContrastive:
 
         return train_acc, test_acc
 
+print("about to start training")
 num_iter = 20000
 lr = 1e-4
 seq_length = 25
