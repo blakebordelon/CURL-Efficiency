@@ -219,7 +219,8 @@ class ContrastedData(datasets.SVHN):
 class Train_CURL():
     def __init__(self, svhn_path, curlfrac=0.5, supfrac=0.5, k=1, shuffle=True, augment=False, use_cuda=False, dload_dataset=False):
         self.k = k
-        self.leakyrelu = nn.LeakyReLU(negative_slope=0.01)
+        self.leakyrelu = nn.LeakyReLU(negative_slope=0.01)  # Not needed anymore?
+        self.softsign = nn.Softsign()
         self.bulk = Net_Bulk()
         self.head = Net_Head()
         normalize = transforms.Compose(
@@ -288,6 +289,7 @@ class Train_CURL():
         optimizer = optim.SGD(self.bulk.parameters(), lr=0.0001, momentum=0.3)
         train_losses = []
         bnum = 0
+        avgdist = torch.tensor(0., device=self.device)
         t = tqdm(leave=True, total=epochs*len(trainloader))
         for epoch in range(epochs):
             for i, data in enumerate(trainloader):
@@ -326,10 +328,14 @@ class Train_CURL():
                 contrast = torch.zeros_like(sim)
                 for i in range(self.k):
                     output = self.bulk(inputs[:,2+i])
-                    contrast += (((outputx-output)**2).sum(-1)) / (4*outputx.shape[-1])
+                    dist = (((outputx-output)**2).sum(-1)) / (4*outputx.shape[-1])
+                    # Think of a smarter way to determine the distance between classes
+                    avgdist = (bnum*avgdist + torch.mean(dist.detach()))/(bnum+1.)
+                    contrast += self.softsign(outputx.shape[-1]*(dist - 0.5*avgdist))*dist
 
                 minibatched_loss = sim - contrast
 
+                #print(avgdist)
                 #print(contrast)
                 #print(sim)
                 loss = torch.mean(minibatched_loss)
@@ -340,6 +346,7 @@ class Train_CURL():
                 loss_val = loss.cpu().item()
                 if i % loss_freq == 0:
                     train_losses.append(loss_val)
+                bnum += 1
                 t.update()
                 t.set_postfix(epoch=f'{epoch}/{epochs-1}', loss=f'{loss_val:.2e}')
         t.close()
@@ -475,7 +482,7 @@ if __name__ == '__main__':
 
     #trainsup = Train_Sup(svhn_path, frac=0.01, shuffle=True, augment=True, use_cuda=True)
     #trainsup.train(epochs=100, test_freq=2000)
-    traincurl = Train_CURL(svhn_path, curlfrac=0.3, supfrac=0.005, k=1, shuffle=True, augment=False, use_cuda=True)
+    traincurl = Train_CURL(svhn_path, curlfrac=0.2, supfrac=0.005, k=1, shuffle=True, augment=True, use_cuda=True)
     traincurl.train(epochs=200, batch_size=5,  test_freq=2000)
-    traincurl.curltrain(epochs=2, batch_size=10)
+    traincurl.curltrain(epochs=25, batch_size=10)
     traincurl.suptrain(epochs=300, batch_size=5,  test_freq=2000)
