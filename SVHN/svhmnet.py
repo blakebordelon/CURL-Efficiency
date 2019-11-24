@@ -8,6 +8,7 @@ import torchvision
 from torchvision import datasets, transforms
 from torch.utils.data.sampler import SubsetRandomSampler
 from tqdm import tqdm
+import time
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -29,24 +30,24 @@ class Net_Bulk(nn.Module):
         self.pool = nn.MaxPool2d(2, 2)
         self.conv2 = nn.Conv2d(6, 16, 5)
         self.fc1 = nn.Linear(16*5*5,120)
-        self.fc2 = nn.Linear(120,15)
 
     def forward(self, x):
         x = self.pool(F.relu(self.conv1(x)))
         x = self.pool(F.relu(self.conv2(x)))
         # TODO check what these dimensions mean
         x = x.view(-1, 16 * 5 * 5)
-        x = F.relu(self.fc1(x))
-        x = torch.tanh(self.fc2(x))
+        x = torch.tanh(self.fc1(x))
         return x
 
 class Net_Head(nn.Module):
     def __init__(self):
         super(Net_Head, self).__init__()
-        self.fc3 = nn.Linear(15,10)
+        self.fc2 = nn.Linear(120,40)
+        self.fc3 = nn.Linear(40,10)
         self.logsoftmax = nn.LogSoftmax(dim=-1)
 
     def forward(self, x):
+        x = F.relu(self.fc2(x))
         x = self.fc3(x)
         x = self.logsoftmax(x)
         return x
@@ -81,7 +82,7 @@ class Train_Sup():
         augtrans = transforms.Compose(
                     [
                      transforms.RandomApply(augcolor, p=0.8),
-                     transforms.RandomApply(augcolor, p=0.8),
+                     transforms.RandomApply(augaffine, p=0.8),
                      transforms.ToTensor(),
                      transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
                      ])
@@ -176,7 +177,7 @@ class ContrastedData(datasets.SVHN):
 
     def __getitem__(self, index):
         imgs = []
-        targets = []  # We actually shouldn't be using the target for CURL anyways
+        targets = torch.zeros(self.k+2, dtype=torch.int64)  # We actually shouldn't be using the target for CURL anyways
         # Create original
         img_base, target_base = self.data[index], int(self.labels[index])
         target = target_base
@@ -187,7 +188,7 @@ class ContrastedData(datasets.SVHN):
             target = self.target_transform(target_base)
         # Note that the provided transform must have included a ToTensor
         imgs.append(imgx.unsqueeze(0))
-        targets.append(target)
+        targets[0] = target
         # Create similar
         imgxp, targetp = img_base, target_base
         imgxp = Image.fromarray(np.transpose(imgxp, (1, 2, 0)))
@@ -196,7 +197,7 @@ class ContrastedData(datasets.SVHN):
         if self.target_transform is not None:
             targetp = self.target_transform(targetp)
         imgs.append(imgxp.unsqueeze(0))
-        targets.append(targetp)
+        targets[1] = targetp
         # Create contrasted
         for i in range(self.k):
             if self.accepted_indices is not None:
@@ -210,7 +211,7 @@ class ContrastedData(datasets.SVHN):
             if self.target_transform is not None:
                 targ = self.target_transform(targ)
             imgs.append(img.unsqueeze(0))
-            targets.append(targ)
+            targets[2+i] = targ
         imgout = torch.cat(imgs, dim=0)
         return imgout, targets
         
@@ -219,8 +220,7 @@ class ContrastedData(datasets.SVHN):
 class Train_CURL():
     def __init__(self, svhn_path, curlfrac=0.5, supfrac=0.5, k=1, shuffle=True, augment=False, use_cuda=False, dload_dataset=False):
         self.k = k
-        self.leakyrelu = nn.LeakyReLU(negative_slope=0.01)  # Not needed anymore?
-        self.softsign = nn.Softsign()
+        self.softplus = nn.Softplus()
         self.bulk = Net_Bulk()
         self.head = Net_Head()
         normalize = transforms.Compose(
@@ -233,7 +233,7 @@ class Train_CURL():
         augtrans = transforms.Compose(
                     [
                      transforms.RandomApply(augcolor, p=0.8),
-                     transforms.RandomApply(augcolor, p=0.8),
+                     transforms.RandomApply(augaffine, p=0.8),
                      transforms.ToTensor(),
                      transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
                      ])
@@ -286,7 +286,8 @@ class Train_CURL():
         self.bulk.train()
         trainloader = torch.utils.data.DataLoader(self.curltrainset, batch_size=batch_size, sampler=self.curltrain_sampler, num_workers=2)
 
-        optimizer = optim.SGD(self.bulk.parameters(), lr=0.0001, momentum=0.3)
+        #optimizer = optim.SGD(self.bulk.parameters(), lr=0.001, momentum=0.3)
+        optimizer = optim.Adam(self.bulk.parameters(), lr=0.0001)
         train_losses = []
         bnum = 0
         avgdist = torch.tensor(0., device=self.device)
@@ -295,49 +296,33 @@ class Train_CURL():
             for i, data in enumerate(trainloader):
                 # get the inputs; data is a list of [inputs, labels]
                 # labels not used, this part is unsupervised
-                inputs = data[0].to(self.device)
+                inputs, targets = data[0].to(self.device), data[1].to(self.device)
 
                 # zero the parameter gradients
                 optimizer.zero_grad()
 
-                # The following can probably be done better by make a superbatch
-                # where we do all the passes simultaneously, probably by flattening
-                # x, x+, x- into the minibatch, and reshaping after
+                dims = inputs.shape
+                inputsflat = torch.flatten(inputs, start_dim=0, end_dim=1)
+                outputsflat = self.bulk(inputsflat)
+                outputs = outputsflat.view(dims[0], dims[1], -1)
 
-                #  # First we send through the main sample x
-                #  outputx = self.bulk(inputs[:,0])
-                #  # Next send the similar one x+
-                #  outputp = self.bulk(inputs[:,1])
-                #  # Note that batched dot product x^t x is just x*x.sum(-1)
-                #  sim = ((outputx*outputp).sum(-1))# / outputx.shape[-1]
-                #  # Finally the remainders
-                #  contrast = torch.zeros_like(sim)
-                #  for i in range(self.k):
-                #      output = self.bulk(inputs[:,2+i])
-                #      contrast += ((outputx*output).sum(-1))# / outputx.shape[-1]
+                # Hadamard product of f and f+, and f and all f-
+                # Then sum the last dimension, so we have computed f^t f+, and k of f^t f-
+                outputs2 = (outputs[:,0:1]*outputs[:,1:]).sum(-1)
+                sim = outputs2[:,0]  # f^t f+
+                #contrast = outputs2[:,1:].sum(-1)  # sum of all f^t f-
+                contrast = (outputs2[:,1:]*torch.where(targets[:,2:]==targets[:,0].unsqueeze(-1),torch.tensor(-1.,device = self.device),torch.tensor(1., device=self.device))).sum(-1)  # sum of all f^t f-
+                #contrast = (outputs2[:,1:]*torch.where(targets[:,2:]==targets[:,0],torch.tensor(0.,device = self.device),torch.tensor(1., device=self.device))).sum(-1)  # sum of all f^t f-
+                #sim = sim + (outputs2[:,1:]*torch.where(targets[:,2:]==targets[:,0],torch.tensor(1.,device = self.device),torch.tensor(0., device=self.device))).sum(-1)  # sum of all f^t f-
 
-                #  minibatched_loss = self.leakyrelu((contrast-0.1*sim))
+                #print(f'contrast {contrast/self.k}')
+                #print(f'sim {sim}')
+                if bnum % 100 == 0:
+                    plt.scatter(bnum,torch.mean((contrast/self.k).detach().cpu()).numpy(), c='r')
+                    plt.scatter(bnum,torch.mean(sim.detach().cpu()).numpy(), c='b')
+                    plt.pause(0.1)
+                minibatched_loss = self.softplus((contrast - sim)/outputs.shape[-1])
 
-                # First we send through the main sample x
-                outputx = self.bulk(inputs[:,0])
-                # Next send the similar one x+
-                outputp = self.bulk(inputs[:,1])
-                # Note that batched dot product x^t x is just x*x.sum(-1)
-                sim = (((outputx-outputp)**2).sum(-1)) / (4*outputx.shape[-1])
-                # Finally the remainders
-                contrast = torch.zeros_like(sim)
-                for i in range(self.k):
-                    output = self.bulk(inputs[:,2+i])
-                    dist = (((outputx-output)**2).sum(-1)) / (4*outputx.shape[-1])
-                    # Think of a smarter way to determine the distance between classes
-                    avgdist = (bnum*avgdist + torch.mean(dist.detach()))/(bnum+1.)
-                    contrast += self.softsign(outputx.shape[-1]*(dist - 0.5*avgdist))*dist
-
-                minibatched_loss = sim - contrast
-
-                #print(avgdist)
-                #print(contrast)
-                #print(sim)
                 loss = torch.mean(minibatched_loss)
                 loss.backward()
                 optimizer.step()
@@ -351,6 +336,7 @@ class Train_CURL():
                 t.set_postfix(epoch=f'{epoch}/{epochs-1}', loss=f'{loss_val:.2e}')
         t.close()
         self.bulk.eval()
+        #plt.show()
         return train_losses
 
     def suptrain(self, batch_size=8, epochs=10, loss_freq=1, test_freq=1000):
@@ -482,7 +468,10 @@ if __name__ == '__main__':
 
     #trainsup = Train_Sup(svhn_path, frac=0.01, shuffle=True, augment=True, use_cuda=True)
     #trainsup.train(epochs=100, test_freq=2000)
-    traincurl = Train_CURL(svhn_path, curlfrac=0.2, supfrac=0.005, k=1, shuffle=True, augment=True, use_cuda=True)
-    traincurl.train(epochs=200, batch_size=5,  test_freq=2000)
-    traincurl.curltrain(epochs=25, batch_size=10)
-    traincurl.suptrain(epochs=300, batch_size=5,  test_freq=2000)
+    traincurl = Train_CURL(svhn_path, curlfrac=0.04, supfrac=0.0015, k=5, shuffle=True, augment=True, use_cuda=True)
+    #for i in range(1):
+    #    traincurl.train(epochs=30, batch_size=5,  test_freq=2000)
+    #    traincurl.curltrain(epochs=1, batch_size=5)
+    traincurl.train(epochs=2500, batch_size=5,  test_freq=2000)
+    traincurl.curltrain(epochs=400, batch_size=5)
+    traincurl.suptrain(epochs=1500, batch_size=5,  test_freq=2000)
