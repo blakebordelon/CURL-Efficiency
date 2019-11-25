@@ -312,15 +312,16 @@ class Train_CURL():
                 sim = outputs2[:,0]  # f^t f+
                 #contrast = outputs2[:,1:].sum(-1)  # sum of all f^t f-
                 contrast = (outputs2[:,1:]*torch.where(targets[:,2:]==targets[:,0].unsqueeze(-1),torch.tensor(-1.,device = self.device),torch.tensor(1., device=self.device))).sum(-1)  # sum of all f^t f-
+
                 #contrast = (outputs2[:,1:]*torch.where(targets[:,2:]==targets[:,0],torch.tensor(0.,device = self.device),torch.tensor(1., device=self.device))).sum(-1)  # sum of all f^t f-
                 #sim = sim + (outputs2[:,1:]*torch.where(targets[:,2:]==targets[:,0],torch.tensor(1.,device = self.device),torch.tensor(0., device=self.device))).sum(-1)  # sum of all f^t f-
 
                 #print(f'contrast {contrast/self.k}')
                 #print(f'sim {sim}')
-                if bnum % 100 == 0:
-                    plt.scatter(bnum,torch.mean((contrast/self.k).detach().cpu()).numpy(), c='r')
-                    plt.scatter(bnum,torch.mean(sim.detach().cpu()).numpy(), c='b')
-                    plt.pause(0.1)
+                # if bnum % 100 == 0:
+                #     plt.scatter(bnum,torch.mean((contrast/self.k).detach().cpu()).numpy(), c='r')
+                #     plt.scatter(bnum,torch.mean(sim.detach().cpu()).numpy(), c='b')
+                #     plt.pause(0.1)
                 minibatched_loss = self.softplus((contrast - sim)/outputs.shape[-1])
 
                 loss = torch.mean(minibatched_loss)
@@ -346,6 +347,7 @@ class Train_CURL():
         criterion = nn.NLLLoss()
         optimizer = optim.SGD(self.head.parameters(), lr=0.001, momentum=0.9)
         train_losses = []
+        test_accs = []
         t = tqdm(leave=True, total=epochs*len(trainloader))
         bnum = 0
         for epoch in range(epochs):
@@ -362,6 +364,7 @@ class Train_CURL():
                             _, predicted = torch.max(outputs.data, 1)
                             total += labels.size(0)
                             correct += (predicted == labels).sum().item()
+                    test_accs.append(100 * correct/total)
                     print(f'Epoch {epoch}: test accuracy = {100 * correct/total}')
 
                 # get the inputs; data is a list of [inputs, labels]
@@ -386,7 +389,7 @@ class Train_CURL():
                 t.set_postfix(epoch=f'{epoch}', loss=f'{loss_val:.2e}')
         t.close()
         self.head.eval()
-        return train_losses
+        return train_losses, test_accs
 
     def train(self, batch_size=8, epochs=10, loss_freq=1, test_freq=10000):
         self.bulk.train()
@@ -397,6 +400,7 @@ class Train_CURL():
         criterion = nn.NLLLoss()
         optimizer = optim.SGD(list(self.bulk.parameters()) + list(self.head.parameters()), lr=0.001, momentum=0.9)
         train_losses = []
+        test_accs = []
         bnum = 0
         t = tqdm(leave=True, total=epochs*len(trainloader))
         for epoch in range(epochs):
@@ -413,6 +417,7 @@ class Train_CURL():
                             _, predicted = torch.max(outputs.data, 1)
                             total += labels.size(0)
                             correct += (predicted == labels).sum().item()
+                    test_accs.append(100 * correct/total)
                     print(f'Epoch {epoch}: test accuracy = {100 * correct/total}')
 
                 # get the inputs; data is a list of [inputs, labels]
@@ -438,7 +443,7 @@ class Train_CURL():
         t.close()
         self.bulk.eval()
         self.head.eval()
-        return train_losses
+        return train_losses, test_accs
 
 
 # function to show an image
@@ -468,10 +473,17 @@ if __name__ == '__main__':
 
     #trainsup = Train_Sup(svhn_path, frac=0.01, shuffle=True, augment=True, use_cuda=True)
     #trainsup.train(epochs=100, test_freq=2000)
-    traincurl = Train_CURL(svhn_path, curlfrac=0.04, supfrac=0.0015, k=5, shuffle=True, augment=True, use_cuda=True)
+    traincurl = Train_CURL(svhn_path, curlfrac=0.08, supfrac=0.0005, k=5, shuffle=True, augment=True, use_cuda=True)
     #for i in range(1):
     #    traincurl.train(epochs=30, batch_size=5,  test_freq=2000)
     #    traincurl.curltrain(epochs=1, batch_size=5)
-    traincurl.train(epochs=2500, batch_size=5,  test_freq=2000)
+    _, sup_acc = traincurl.train(epochs=2500, batch_size=5,  test_freq=1000)
     traincurl.curltrain(epochs=400, batch_size=5)
-    traincurl.suptrain(epochs=1500, batch_size=5,  test_freq=2000)
+    _, postcurl_acc = traincurl.suptrain(epochs=1000, batch_size=5,  test_freq=1000)
+
+    supfile = "plots/0005.npy"
+    curlfile = "plots/08-0005.npy"
+    sup_arr = np.array(sup_acc)
+    np.save(supfile, sup_arr)
+    curl_arr = np.array(postcurl_acc)
+    np.save(curlfile, curl_arr)
