@@ -235,12 +235,12 @@ class Train:
         plt.plot(losses_un)
         plt.xlabel('CURL Epochs')
         plt.ylabel('CURL Loss')
-        plt.savefig('unsup_loss.pdf')
+        plt.savefig('unsup_loss_larger.pdf')
         plt.show()
         plt.plot(losses_sup)
         plt.xlabel('CURL Epochs')
         plt.ylabel('Supervised Loss')
-        plt.savefig('sup_loss.pdf')
+        plt.savefig('sup_loss_larger.pdf')
         plt.show()
         model.eval()
         X_new = model.forward(torch.tensor(self.data_set.X, dtype = torch.float)).detach().numpy()
@@ -283,7 +283,7 @@ class Train:
 
 num_centers = 30
 num_samples = 50
-dim = 2
+dim = 10
 up_dim = 20
 var = 0.005
 num_iter = 200000
