@@ -484,7 +484,7 @@ if __name__ == '__main__':
 
     #trainsup = Train_Sup(svhn_path, frac=0.01, shuffle=True, augment=True, use_cuda=True)
     #trainsup.train(epochs=100, test_freq=2000)
-    traincurl = Train_CURL(svhn_path, curlfrac=0.04, supfrac=0.0015, k=5, shuffle=True, augment=True, use_cuda=True)
+    traincurl = Train_CURL(svhn_path, curlfrac=0.04, supfrac=0.0030, k=5, shuffle=True, augment=True, use_cuda=True)
     #for i in range(1):
     #    traincurl.train(epochs=30, batch_size=5,  test_freq=2000)
     #    traincurl.curltrain(epochs=1, batch_size=5)
@@ -493,8 +493,8 @@ if __name__ == '__main__':
     traincurl.curltrain(epochs=400, batch_size=5)
     _, postcurl_acc = traincurl.suptrain(epochs=1000, batch_size=5,  test_freq=1000)
 
-    supfile = "plots/imp-0015.npy"
-    curlfile = "plots/imp-04-0015.npy"
+    supfile = "plots/imp-0030.npy"
+    curlfile = "plots/imp-04-0030.npy"
     sup_arr = np.array(sup_acc)
     np.save(supfile, sup_arr)
     curl_arr = np.array(postcurl_acc)
