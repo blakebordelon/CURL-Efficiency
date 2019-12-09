@@ -216,40 +216,38 @@ class ContrastedData(datasets.SVHN):
         return imgout, targets
 
 
-# TODO - select actual same class ones.
-class ApproxContrastedData(datasets.SVHN):
-    def __init__(self, root, split='train', accepted_indices=None, contrast_transform=None, k=1, 
+class DumbData(datasets.SVHN):
+    def __init__(self, root, split='train', contrast_transform=None, 
                  transform=None, target_transform=None, download=False):
-        super(ApproxContrastedData, self).__init__(root, split=split, transform=transform,  
+        super(DumbData, self).__init__(root, split=split, transform=transform,  
                                              target_transform=target_transform, download=download)
-
         self.contrast_transform = contrast_transform
-        self.k = k
-        self.accepted_indices = accepted_indices
+        self.byclass = None
         if transform is None:
             print("Warning - a transform must be provided, at the very least transform.ToTensor()")
             print("After transformation, the result should be a tensor.")
 
-    def setnet(self, bulk, head, device):
-        self.bulk = bulk.to(torch.device("cpu"))
-        self.head = head.to(torch.device("cpu"))
-        self.device = device
-
-    def _guessclass(self, imgin):
-        # Estimate its class
-        #imgin = imgin.to(self.device)
-        imgin = imgin.unsqueeze(0)
-        with torch.no_grad():
-            output = self.bulk(imgin)
-            output = self.head(output)
-            approxtarget = torch.argmax(output, dim=-1, keepdim=False)
-            approxtarget = approxtarget.cpu()
-        return approxtarget.squeeze(0)
+    def setapproxlabels(self, byclass, labeldict):
+        self.byclass = byclass
+        self.labeldict = labeldict
 
 
     def __getitem__(self, index):
         imgs = []
-        targets = torch.zeros(self.k+2, dtype=torch.int64)  # We actually shouldn't be using the target for CURL anyways
+        #approxlabel = torch.zeros(1, dtype=torch.int64)  # We actually shouldn't be using the target for CURL anyways
+        # Create original (this one we actually know the index of)
+        img_base, target_base = self.data[index], int(self.labels[index])
+        target = target_base
+        imgx = Image.fromarray(np.transpose(img_base, (1, 2, 0)))
+        if self.transform is not None:
+            imgx = self.transform(imgx)
+        if self.target_transform is not None:
+            target = self.target_transform(target_base)
+        # Note that the provided transform must have included a ToTensor
+        approxlabel = self.labeldict[index]
+        return imgx, approxlabel
+
+    def getsingle(self, index):
         # Create original
         img_base, target_base = self.data[index], int(self.labels[index])
         target = target_base
@@ -259,49 +257,7 @@ class ApproxContrastedData(datasets.SVHN):
         if self.target_transform is not None:
             target = self.target_transform(target_base)
         # Note that the provided transform must have included a ToTensor
-        imgs.append(imgx.unsqueeze(0))
-        targets[0] = target
-
-        approxclass =  self._guessclass(imgx)
-        #print(f"Approx class is: {approxclass}")
-        # Find similar
-        notfound = True
-        while notfound:
-            if self.accepted_indices is not None:
-                randind = np.random.choice(self.accepted_indices)
-            else:
-                randind = np.random.randint(len(self.data))
-            img, targ = self.data[randind], int(self.labels[randind])
-            img = Image.fromarray(np.transpose(img, (1, 2, 0)))
-            if self.transform is not None:
-                img = self.transform(img)
-            if self.target_transform is not None:
-                targ = self.target_transform(targ)
-            if self._guessclass(img) == approxclass:
-                notfound = False
-        imgs.append(img.unsqueeze(0))
-        targets[1] = targ
-
-        # Create contrasted
-        for i in range(self.k):
-            notfound = True
-            while notfound:
-                if self.accepted_indices is not None:
-                    randind = np.random.choice(self.accepted_indices)
-                else:
-                    randind = np.random.randint(len(self.data))
-                img, targ = self.data[randind], int(self.labels[randind])
-                img = Image.fromarray(np.transpose(img, (1, 2, 0)))
-                if self.transform is not None:
-                    img = self.transform(img)
-                if self.target_transform is not None:
-                    targ = self.target_transform(targ)
-                if self._guessclass(img) != approxclass:
-                    notfound = False
-            imgs.append(img.unsqueeze(0))
-            targets[2+i] = targ
-        imgout = torch.cat(imgs, dim=0)
-        return imgout, targets
+        return imgx.unsqueeze(0), target
         
 
 # TODO
@@ -350,15 +306,17 @@ class Train_CURL():
         curlend = int(np.floor(curlfrac/(supfrac + curlfrac) * end))
         if shuffle:
             np.random.shuffle(indices)
-        curltrain_indices = indices[:curlend]
+        dumbtrain_indices = indices[:curlend]
         suptrain_indices = indices[curlend:end]
-        print(f"Number of labeled images: {len(suptrain_indices)}")
-        print(f"Number of unlabeled images: {len(curltrain_indices)}")
-        self.suptrain_sampler = SubsetRandomSampler(suptrain_indices)
-        self.curltrain_sampler = SubsetRandomSampler(curltrain_indices)
 
-        #self.curltrainset = ContrastedData(svhn_path, split='train', accepted_indices=curltrain_indices, contrast_transform=contrasttrans, k=k, transform=transform, download=dload_dataset)
-        self.curltrainset = ApproxContrastedData(svhn_path, split='train', accepted_indices=curltrain_indices, contrast_transform=contrasttrans, k=k, transform=transform, download=dload_dataset)
+        self.dumbtrain_indices = dumbtrain_indices
+        self.suptrain_indices = suptrain_indices
+        print(f"Number of labeled images: {len(suptrain_indices)}")
+        print(f"Number of unlabeled images: {len(dumbtrain_indices)}")
+        self.suptrain_sampler = SubsetRandomSampler(suptrain_indices)
+        self.dumbtrain_sampler = SubsetRandomSampler(dumbtrain_indices)
+
+        self.dumbtrainset = DumbData(svhn_path, split='train', transform=transform, target_transform=None, download=dload_dataset)
 
         if use_cuda:
             if torch.cuda.is_available():
@@ -368,80 +326,31 @@ class Train_CURL():
                 self.device = torch.device('cpu')
         else:
             self.device = torch.device('cpu')
+
+        self.approxclasses = []
+        for i in range(10):
+            self.approxclasses.append([])
         self.bulk.to(self.device)
         self.head.to(self.device)
 
-    def curltrain(self, batch_size=8, epochs=10, loss_freq=1):
-        bulkcopy = Net_Bulk()
-        bulkcopy.load_state_dict(self.bulk.state_dict())
-        bulkcopy.to(self.device)
 
-        self.curltrainset.setnet(bulkcopy, self.head, self.device)
-
-        self.bulk.train()
-        trainloader = torch.utils.data.DataLoader(self.curltrainset, batch_size=batch_size, sampler=self.curltrain_sampler, num_workers=2)
-
-        #optimizer = optim.SGD(self.bulk.parameters(), lr=0.001, momentum=0.3)
-        optimizer = optim.Adam(self.bulk.parameters(), lr=0.0001)
-        train_losses = []
-        bnum = 0
-        avgdist = torch.tensor(0., device=self.device)
-        t = tqdm(leave=True, total=epochs*len(trainloader))
-        for epoch in range(epochs):
-            for i, data in enumerate(trainloader):
-                # get the inputs; data is a list of [inputs, labels]
-                # labels not used, this part is unsupervised
-                inputs, targets = data[0].to(self.device), data[1].to(self.device)
-
-                # zero the parameter gradients
-                optimizer.zero_grad()
-
-                dims = inputs.shape
-                inputsflat = torch.flatten(inputs, start_dim=0, end_dim=1)
-                outputsflat = self.bulk(inputsflat)
-                outputs = outputsflat.view(dims[0], dims[1], -1)
-
-                # # Get approximated target values
-                # with torch.no_grad():
-                #     classflat = bulkcopy(inputsflat)  # Original bulk after sup train
-                #     classflat = self.head(classflat)
-                #     classflat = torch.argmax(classflat, dim=-1, keepdim=False)
-                #     approxtargets = classflat.view(dims[0], dims[1])
-
-                # Hadamard product of f and f+, and f and all f-
-                # Then sum the last dimension, so we have computed f^t f+, and k of f^t f-
-                outputs2 = (outputs[:,0:1]*outputs[:,1:]).sum(-1)
-                sim = outputs2[:,0]  # f^t f+
-                contrast = outputs2[:,1:].sum(-1)  # sum of all f^t f-
-
-                #contrast = (outputs2[:,1:]*torch.where(approxtargets[:,2:]==approxtargets[:,0].unsqueeze(-1),torch.tensor(-1.,device = self.device),torch.tensor(1., device=self.device))).sum(-1)  # sum of all f^t f-
-
-                #contrast = (outputs2[:,1:]*torch.where(targets[:,2:]==targets[:,0],torch.tensor(0.,device = self.device),torch.tensor(1., device=self.device))).sum(-1)  # sum of all f^t f-
-                #sim = sim + (outputs2[:,1:]*torch.where(targets[:,2:]==targets[:,0],torch.tensor(1.,device = self.device),torch.tensor(0., device=self.device))).sum(-1)  # sum of all f^t f-
-
-                #print(f'contrast {contrast/self.k}')
-                #print(f'sim {sim}')
-                # if bnum % 100 == 0:
-                #     plt.scatter(bnum,torch.mean((contrast/self.k).detach().cpu()).numpy(), c='r')
-                #     plt.scatter(bnum,torch.mean(sim.detach().cpu()).numpy(), c='b')
-                #     plt.pause(0.1)
-                minibatched_loss = self.softplus((contrast - sim)/outputs.shape[-1])
-
-                loss = torch.mean(minibatched_loss)
-                loss.backward()
-                optimizer.step()
-
-                # record loss
-                loss_val = loss.cpu().item()
-                if i % loss_freq == 0:
-                    train_losses.append(loss_val)
-                bnum += 1
-                t.update()
-                t.set_postfix(epoch=f'{epoch}/{epochs-1}', loss=f'{loss_val:.2e}')
-        t.close()
+    def approx_labels(self):
         self.bulk.eval()
-        #plt.show()
-        return train_losses
+        self.head.eval()
+        self.labeldict = {}
+        t = tqdm(leave=True, total=len(self.dumbtrain_indices))
+        for i in self.dumbtrain_indices:
+            img, target = self.dumbtrainset.getsingle(i)
+            img = img.to(self.device)
+            output = self.bulk(img)
+            output = self.head(output)
+            approxlabel = torch.argmax(output, dim=-1, keepdim=False).squeeze(0).item()
+            self.approxclasses[approxlabel].append(i)
+            self.labeldict[i] = approxlabel
+            t.update()
+        t.close()
+        self.dumbtrainset.setapproxlabels(self.approxclasses, self.labeldict)
+
 
     def suptrain(self, batch_size=8, epochs=10, loss_freq=1, test_freq=1000):
         self.head.train()
@@ -491,6 +400,62 @@ class Train_CURL():
                 t.update()
                 t.set_postfix(epoch=f'{epoch}', loss=f'{loss_val:.2e}')
         t.close()
+        self.head.eval()
+        return train_losses, test_accs
+
+    
+    def dumbtrain(self, batch_size=8, epochs=10, loss_freq=1, test_freq=10000):
+        self.approx_labels()
+        self.bulk.train()
+        self.head.train()
+        trainloader = torch.utils.data.DataLoader(self.dumbtrainset, batch_size=batch_size, sampler=self.dumbtrain_sampler, num_workers=2)
+        testloader = torch.utils.data.DataLoader(self.testset, batch_size=8, shuffle=False, num_workers=2)
+
+        criterion = nn.NLLLoss()
+        optimizer = optim.SGD(list(self.bulk.parameters()) + list(self.head.parameters()), lr=0.001, momentum=0.9)
+        train_losses = []
+        test_accs = []
+        bnum = 0
+        t = tqdm(leave=True, total=epochs*len(trainloader))
+        for epoch in range(epochs):
+            for i, data in enumerate(trainloader):
+
+                if bnum % test_freq == 0:
+                    correct = 0
+                    total = 0
+                    with torch.no_grad():
+                        for data in testloader:
+                            images, labels = data[0].to(self.device), data[1].to(self.device)
+                            outputs = self.bulk(images)
+                            outputs = self.head(outputs)
+                            _, predicted = torch.max(outputs.data, 1)
+                            total += labels.size(0)
+                            correct += (predicted == labels).sum().item()
+                    test_accs.append(100 * correct/total)
+                    print(f'Epoch {epoch}: test accuracy = {100 * correct/total}')
+
+                # get the inputs; data is a list of [inputs, labels]
+                inputs, labels = data[0].to(self.device), data[1].to(self.device)
+
+                # zero the parameter gradients
+                optimizer.zero_grad()
+
+                # forward + backward + optimize
+                outputs = self.bulk(inputs)
+                outputs = self.head(outputs)
+                loss = criterion(outputs, labels)
+                loss.backward()
+                optimizer.step()
+
+                # record loss
+                loss_val = loss.cpu().item()
+                if i % loss_freq == 0:
+                    train_losses.append(loss_val)
+                bnum += 1
+                t.update()
+                t.set_postfix(epoch=f'{epoch}', loss=f'{loss_val:.2e}')
+        t.close()
+        self.bulk.eval()
         self.head.eval()
         return train_losses, test_accs
 
@@ -576,22 +541,22 @@ if __name__ == '__main__':
 
     #trainsup = Train_Sup(svhn_path, frac=0.01, shuffle=True, augment=True, use_cuda=True)
     #trainsup.train(epochs=100, test_freq=2000)
-    traincurl = Train_CURL(svhn_path, curlfrac=0.10, supfrac=0.0030, k=5, shuffle=True, augment=True, use_cuda=True)
+    traincurl = Train_CURL(svhn_path, curlfrac=0.04, supfrac=0.0015, k=5, shuffle=True, augment=True, use_cuda=True)
     #for i in range(1):
     #    traincurl.train(epochs=30, batch_size=5,  test_freq=2000)
     #    traincurl.curltrain(epochs=1, batch_size=5)
 
-    _, sup_acc = traincurl.train(epochs=100, batch_size=5,  test_freq=1000)
-    traincurl.curltrain(epochs=8, batch_size=5)
-    _, postcurl_acc = traincurl.suptrain(epochs=10, batch_size=5,  test_freq=1000)
+    #_, sup_acc = traincurl.train(epochs=150, batch_size=5,  test_freq=1000)
+    #traincurl.curltrain(epochs=1, batch_size=5)
+    #_, postcurl_acc = traincurl.suptrain(epochs=10, batch_size=5,  test_freq=1000)
 
-    # _, sup_acc = traincurl.train(epochs=2500, batch_size=5,  test_freq=1000)
-    # traincurl.curltrain(epochs=800, batch_size=5)
-    # _, postcurl_acc = traincurl.suptrain(epochs=1000, batch_size=5,  test_freq=1000)
+    _, sup_acc = traincurl.train(epochs=1000, batch_size=5,  test_freq=1000)
+    traincurl.dumbtrain(epochs=200, batch_size=5, test_freq=1000)
+    _, postcurl_acc = traincurl.suptrain(epochs=1000, batch_size=5,  test_freq=1000)
 
-    # supfile = "plots/imp-0060.npy"
-    # curlfile = "plots/imp-10-0060.npy"
-    # sup_arr = np.array(sup_acc)
-    # np.save(supfile, sup_arr)
-    # curl_arr = np.array(postcurl_acc)
-    # np.save(curlfile, curl_arr)
+    supfile = "plots/naive-0015.npy"
+    curlfile = "plots/naive-04-0015.npy"
+    sup_arr = np.array(sup_acc)
+    np.save(supfile, sup_arr)
+    curl_arr = np.array(postcurl_acc)
+    np.save(curlfile, curl_arr)

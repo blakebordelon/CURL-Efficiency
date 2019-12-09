@@ -216,35 +216,26 @@ class ContrastedData(datasets.SVHN):
         return imgout, targets
 
 
-# TODO - select actual same class ones.
 class ApproxContrastedData(datasets.SVHN):
-    def __init__(self, root, split='train', accepted_indices=None, contrast_transform=None, k=1, 
+    def __init__(self, root, split='train', contrast_transform=None, k=1, 
                  transform=None, target_transform=None, download=False):
         super(ApproxContrastedData, self).__init__(root, split=split, transform=transform,  
                                              target_transform=target_transform, download=download)
-
         self.contrast_transform = contrast_transform
         self.k = k
-        self.accepted_indices = accepted_indices
+        self.byclass = None
+        self.excludelabel = []
+        for i in range(10):
+            templist = list(range(10))
+            templist.remove(i)
+            self.excludelabel.append(templist)
         if transform is None:
             print("Warning - a transform must be provided, at the very least transform.ToTensor()")
             print("After transformation, the result should be a tensor.")
 
-    def setnet(self, bulk, head, device):
-        self.bulk = bulk.to(torch.device("cpu"))
-        self.head = head.to(torch.device("cpu"))
-        self.device = device
-
-    def _guessclass(self, imgin):
-        # Estimate its class
-        #imgin = imgin.to(self.device)
-        imgin = imgin.unsqueeze(0)
-        with torch.no_grad():
-            output = self.bulk(imgin)
-            output = self.head(output)
-            approxtarget = torch.argmax(output, dim=-1, keepdim=False)
-            approxtarget = approxtarget.cpu()
-        return approxtarget.squeeze(0)
+    def setapproxlabels(self, byclass, labeldict):
+        self.byclass = byclass
+        self.labeldict = labeldict
 
 
     def __getitem__(self, index):
@@ -262,46 +253,44 @@ class ApproxContrastedData(datasets.SVHN):
         imgs.append(imgx.unsqueeze(0))
         targets[0] = target
 
-        approxclass =  self._guessclass(imgx)
-        #print(f"Approx class is: {approxclass}")
-        # Find similar
-        notfound = True
-        while notfound:
-            if self.accepted_indices is not None:
-                randind = np.random.choice(self.accepted_indices)
-            else:
-                randind = np.random.randint(len(self.data))
+        approxlabel = self.labeldict[index]
+        # Create similar
+        simind = np.random.choice(self.byclass[approxlabel])
+        img, targ = self.data[simind], int(self.labels[simind])
+        img = Image.fromarray(np.transpose(img, (1, 2, 0)))
+        if self.transform is not None:
+            img = self.contrast_transform(img)
+        if self.target_transform is not None:
+            targ = self.target_transform(targ)
+        imgs.append(img.unsqueeze(0))
+        targets[1] = targ
+
+        # Create contrasted
+        for i in range(self.k):
+            classnum = np.random.choice(self.excludelabel[approxlabel])
+            randind = np.random.choice(self.byclass[classnum])
             img, targ = self.data[randind], int(self.labels[randind])
             img = Image.fromarray(np.transpose(img, (1, 2, 0)))
             if self.transform is not None:
                 img = self.transform(img)
             if self.target_transform is not None:
                 targ = self.target_transform(targ)
-            if self._guessclass(img) == approxclass:
-                notfound = False
-        imgs.append(img.unsqueeze(0))
-        targets[1] = targ
-
-        # Create contrasted
-        for i in range(self.k):
-            notfound = True
-            while notfound:
-                if self.accepted_indices is not None:
-                    randind = np.random.choice(self.accepted_indices)
-                else:
-                    randind = np.random.randint(len(self.data))
-                img, targ = self.data[randind], int(self.labels[randind])
-                img = Image.fromarray(np.transpose(img, (1, 2, 0)))
-                if self.transform is not None:
-                    img = self.transform(img)
-                if self.target_transform is not None:
-                    targ = self.target_transform(targ)
-                if self._guessclass(img) != approxclass:
-                    notfound = False
             imgs.append(img.unsqueeze(0))
             targets[2+i] = targ
         imgout = torch.cat(imgs, dim=0)
         return imgout, targets
+
+    def getsingle(self, index):
+        # Create original
+        img_base, target_base = self.data[index], int(self.labels[index])
+        target = target_base
+        imgx = Image.fromarray(np.transpose(img_base, (1, 2, 0)))
+        if self.transform is not None:
+            imgx = self.transform(imgx)
+        if self.target_transform is not None:
+            target = self.target_transform(target_base)
+        # Note that the provided transform must have included a ToTensor
+        return imgx.unsqueeze(0), target
         
 
 # TODO
@@ -352,13 +341,15 @@ class Train_CURL():
             np.random.shuffle(indices)
         curltrain_indices = indices[:curlend]
         suptrain_indices = indices[curlend:end]
+
+        self.curltrain_indices = curltrain_indices
         print(f"Number of labeled images: {len(suptrain_indices)}")
         print(f"Number of unlabeled images: {len(curltrain_indices)}")
         self.suptrain_sampler = SubsetRandomSampler(suptrain_indices)
         self.curltrain_sampler = SubsetRandomSampler(curltrain_indices)
 
         #self.curltrainset = ContrastedData(svhn_path, split='train', accepted_indices=curltrain_indices, contrast_transform=contrasttrans, k=k, transform=transform, download=dload_dataset)
-        self.curltrainset = ApproxContrastedData(svhn_path, split='train', accepted_indices=curltrain_indices, contrast_transform=contrasttrans, k=k, transform=transform, download=dload_dataset)
+        self.curltrainset = ApproxContrastedData(svhn_path, split='train', contrast_transform=contrasttrans, k=k, transform=normalize, download=dload_dataset)
 
         if use_cuda:
             if torch.cuda.is_available():
@@ -368,15 +359,34 @@ class Train_CURL():
                 self.device = torch.device('cpu')
         else:
             self.device = torch.device('cpu')
+
+        self.approxclasses = []
+        for i in range(10):
+            self.approxclasses.append([])
         self.bulk.to(self.device)
         self.head.to(self.device)
 
-    def curltrain(self, batch_size=8, epochs=10, loss_freq=1):
-        bulkcopy = Net_Bulk()
-        bulkcopy.load_state_dict(self.bulk.state_dict())
-        bulkcopy.to(self.device)
 
-        self.curltrainset.setnet(bulkcopy, self.head, self.device)
+    def approx_labels(self):
+        self.bulk.eval()
+        self.head.eval()
+        self.labeldict = {}
+        t = tqdm(leave=True, total=len(self.curltrain_indices))
+        for i in self.curltrain_indices:
+            img, target = self.curltrainset.getsingle(i)
+            img = img.to(self.device)
+            output = self.bulk(img)
+            output = self.head(output)
+            approxlabel = torch.argmax(output, dim=-1, keepdim=False).squeeze(0).item()
+            self.approxclasses[approxlabel].append(i)
+            self.labeldict[i] = approxlabel
+            t.update()
+        t.close()
+        self.curltrainset.setapproxlabels(self.approxclasses, self.labeldict)
+
+
+    def curltrain(self, batch_size=8, epochs=10, loss_freq=1):
+        self.approx_labels()
 
         self.bulk.train()
         trainloader = torch.utils.data.DataLoader(self.curltrainset, batch_size=batch_size, sampler=self.curltrain_sampler, num_workers=2)
@@ -576,22 +586,22 @@ if __name__ == '__main__':
 
     #trainsup = Train_Sup(svhn_path, frac=0.01, shuffle=True, augment=True, use_cuda=True)
     #trainsup.train(epochs=100, test_freq=2000)
-    traincurl = Train_CURL(svhn_path, curlfrac=0.10, supfrac=0.0030, k=5, shuffle=True, augment=True, use_cuda=True)
+    traincurl = Train_CURL(svhn_path, curlfrac=0.04, supfrac=0.0015, k=5, shuffle=True, augment=True, use_cuda=True)
     #for i in range(1):
     #    traincurl.train(epochs=30, batch_size=5,  test_freq=2000)
     #    traincurl.curltrain(epochs=1, batch_size=5)
 
-    _, sup_acc = traincurl.train(epochs=100, batch_size=5,  test_freq=1000)
-    traincurl.curltrain(epochs=8, batch_size=5)
-    _, postcurl_acc = traincurl.suptrain(epochs=10, batch_size=5,  test_freq=1000)
+    #_, sup_acc = traincurl.train(epochs=150, batch_size=5,  test_freq=1000)
+    #traincurl.curltrain(epochs=1, batch_size=5)
+    #_, postcurl_acc = traincurl.suptrain(epochs=10, batch_size=5,  test_freq=1000)
 
-    # _, sup_acc = traincurl.train(epochs=2500, batch_size=5,  test_freq=1000)
-    # traincurl.curltrain(epochs=800, batch_size=5)
-    # _, postcurl_acc = traincurl.suptrain(epochs=1000, batch_size=5,  test_freq=1000)
+    _, sup_acc = traincurl.train(epochs=1000, batch_size=5,  test_freq=1000)
+    traincurl.curltrain(epochs=200, batch_size=5)
+    _, postcurl_acc = traincurl.suptrain(epochs=1000, batch_size=5,  test_freq=1000)
 
-    # supfile = "plots/imp-0060.npy"
-    # curlfile = "plots/imp-10-0060.npy"
-    # sup_arr = np.array(sup_acc)
-    # np.save(supfile, sup_arr)
-    # curl_arr = np.array(postcurl_acc)
-    # np.save(curlfile, curl_arr)
+    supfile = "plots/bimp-0015_2.npy"
+    curlfile = "plots/bimp-04-0015_2.npy"
+    sup_arr = np.array(sup_acc)
+    np.save(supfile, sup_arr)
+    curl_arr = np.array(postcurl_acc)
+    np.save(curlfile, curl_arr)
