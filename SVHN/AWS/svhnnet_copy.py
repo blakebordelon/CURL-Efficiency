@@ -595,12 +595,12 @@ if __name__ == '__main__':
     #traincurl.curltrain(epochs=1, batch_size=5)
     #_, postcurl_acc = traincurl.suptrain(epochs=10, batch_size=5,  test_freq=1000)
 
-    _, sup_acc = traincurl.train(epochs=1000, batch_size=5,  test_freq=1000)
-    traincurl.curltrain(epochs=200, batch_size=5)
-    _, postcurl_acc = traincurl.suptrain(epochs=1000, batch_size=5,  test_freq=1000)
+    _, sup_acc = traincurl.train(epochs=200, batch_size=5,  test_freq=1000)
+    traincurl.curltrain(epochs=2, batch_size=5)
+    _, postcurl_acc = traincurl.suptrain(epochs=10, batch_size=5,  test_freq=1000)
 
-    supfile = "plots/aws-0015.npy"
-    curlfile = "plots/aws-04-0015.npy"
+    supfile = "plots/test.npy"
+    curlfile = "plots/test-04-0015.npy"
     sup_arr = np.array(sup_acc)
     np.save(supfile, sup_arr)
     curl_arr = np.array(postcurl_acc)
