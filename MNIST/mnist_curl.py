@@ -304,7 +304,10 @@ for i in range(len(M_vals)):
         decoder = Decoder(output_dim, input_dim)
         encoder, decoder = trainer.train_autoencoder_CURL(encoder, decoder, num_iter)
         sup_net = SUP_NET(output_dim, num_classes)
+        print("calling train sup for autoencoder")
         sup_net = trainer.train_sup(encoder, sup_net, 1000)
+        test_risk_ae = trainer.test_sup(encoder, sup_net)
+        print("test risk ae: %lf" % test_risk_ae)
 
 
 
