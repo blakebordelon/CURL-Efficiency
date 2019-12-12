@@ -229,7 +229,8 @@ class ApproxContrastedData(datasets.SVHN):
             templist = list(range(10))
             templist.remove(i)
             self.excludelabel.append(templist)
-        if transform is None:
+        self.transform = transform
+        if self.transform is None:
             print("Warning - a transform must be provided, at the very least transform.ToTensor()")
             print("After transformation, the result should be a tensor.")
 
@@ -258,7 +259,7 @@ class ApproxContrastedData(datasets.SVHN):
         simind = np.random.choice(self.byclass[approxlabel])
         img, targ = self.data[simind], int(self.labels[simind])
         img = Image.fromarray(np.transpose(img, (1, 2, 0)))
-        if self.transform is not None:
+        if self.contrast_transform is not None:
             img = self.contrast_transform(img)
         if self.target_transform is not None:
             targ = self.target_transform(targ)
