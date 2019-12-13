@@ -57,8 +57,9 @@ svhn_path = '~/Downloads/Datasets/SVHN'
 
 if __name__ == '__main__':
 
-    labeledfrac = '0.002'
-    unlabeledfrac = '0.04'
+    run = '4'
+    labeledfrac = '0.005'
+    unlabeledfrac = '0.095'
 
     normalize = transforms.Compose(
                                    [transforms.ToTensor(),
@@ -87,7 +88,7 @@ if __name__ == '__main__':
                             curlloss=softplus,
                             labeledfrac=float(labeledfrac),
                             unlabeledfrac=float(unlabeledfrac),
-                            shuffle=False,
+                            shuffle=True,
                             k=1,
                             transform=augtrans,
                             augment_transform=None,
@@ -107,10 +108,10 @@ if __name__ == '__main__':
     _, sims, conts = curltrainer.curltrain(epochs=200, batch_size=5)
     _, postcurl_acc = curltrainer.suptrain(epochs=400, batch_size=5,  test_freq=1000)
 
-    supfile = f"CURL/SVHN/plots/sup-{labeledfrac}-{unlabeledfrac}.npy"
-    unsupfile = f"CURL/SVHN/plots/unsup-{labeledfrac}-{unlabeledfrac}.npy"
-    simfile = f"CURL/SVHN/plots/sim-{labeledfrac}-{unlabeledfrac}.npy"
-    contfile = f"CURL/SVHN/plots/cont-{labeledfrac}-{unlabeledfrac}.npy"
+    supfile = f"CURL/SVHN/plots/sup-{run}-{labeledfrac}-{unlabeledfrac}.npy"
+    unsupfile = f"CURL/SVHN/plots/unsup-{run}-{labeledfrac}-{unlabeledfrac}.npy"
+    simfile = f"CURL/SVHN/plots/sim-{run}-{labeledfrac}-{unlabeledfrac}.npy"
+    contfile = f"CURL/SVHN/plots/cont-{run}-{labeledfrac}-{unlabeledfrac}.npy"
     sup_arr = np.array(sup_acc)
     np.save(supfile, sup_arr)
     unsup_arr = np.array(postcurl_acc)
