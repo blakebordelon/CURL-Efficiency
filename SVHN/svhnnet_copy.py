@@ -433,8 +433,12 @@ class Train_CURL():
                 # Hadamard product of f and f+, and f and all f-
                 # Then sum the last dimension, so we have computed f^t f+, and k of f^t f-
                 outputs2 = (outputs[:,0:1]*outputs[:,1:]).sum(-1)
+                # compute norms
+                #norms = torch.sqrt((outputs*outputs).sum(-1))
+                #sim = outputs2[:,0]/(norms[:,0]*norms[:,1])  # f^t f+
+                #contrast = (outputs2[:,1:]/(norms[:,0:1]*norms[:,2:])).sum(-1)  # sum of all f^t f-
                 sim = outputs2[:,0]  # f^t f+
-                contrast = outputs2[:,1:].sum(-1)  # sum of all f^t f-
+                contrast = (outputs2[:,1:]).sum(-1)  # sum of all f^t f-
 
                 #contrast = (outputs2[:,1:]*torch.where(approxtargets[:,2:]==approxtargets[:,0].unsqueeze(-1),torch.tensor(-1.,device = self.device),torch.tensor(1., device=self.device))).sum(-1)  # sum of all f^t f-
 
@@ -448,7 +452,7 @@ class Train_CURL():
                 #     plt.scatter(bnum,torch.mean(sim.detach().cpu()).numpy(), c='b')
                 #     plt.pause(0.1)
                 #minibatched_loss = self.softplus((contrast - sim)/outputs.shape[-1])
-                minibatched_loss = self.softplus((1*contrast - sim)/outputs.shape[-1])
+                minibatched_loss = self.softplus((contrast - sim)/outputs.shape[-1] + 1.)
 
                 loss = torch.mean(minibatched_loss)
                 loss.backward()
@@ -620,7 +624,7 @@ if __name__ == '__main__':
     #_, postcurl_acc = traincurl.suptrain(epochs=10, batch_size=5,  test_freq=1000)
 
     _, sup_acc = traincurl.train(epochs=1000, batch_size=5,  test_freq=1000)
-    traincurl.curltrain(epochs=200, batch_size=5, loss_freq=400)
+    traincurl.curltrain(epochs=400, batch_size=5, loss_freq=400)
     _, postcurl_acc = traincurl.suptrain(epochs=500, batch_size=5,  test_freq=1000)
 
     supfile = "plots/bimp-0015_2.npy"
