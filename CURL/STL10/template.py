@@ -245,6 +245,7 @@ class ResNet_Head(nn.Module):
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         print(f'latentdim = {512*block.expansion}')
         self.fc = nn.Linear(512 * block.expansion, num_classes)
+        self.logsoftmax = nn.LogSoftmax(dim=-1)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -289,6 +290,7 @@ class ResNet_Head(nn.Module):
 
     def _forward(self, x):
         x = self.fc(x)
+        x = self.logsoftmax(x)
         return x
 
     # Allow for accessing forward method in a inherited class
