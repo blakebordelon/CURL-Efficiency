@@ -103,9 +103,9 @@ if __name__ == '__main__':
                             use_cuda=True,
                             download_dataset=False)
 
-    _, sup_acc = curltrainer.train(epochs=700, batch_size=5,  test_freq=1000)
+    _, sup_acc = curltrainer.train(epochs=900, batch_size=5,  test_freq=1000)
     curltrainer.get_approximate_labels()
-    _, sims, conts = curltrainer.curltrain(epochs=200, batch_size=5)
+    _, sims, conts = curltrainer.curltrain(epochs=300, batch_size=5)
     _, postcurl_acc = curltrainer.suptrain(epochs=400, batch_size=5,  test_freq=1000)
 
     supfile = f"CURL/SVHN/plots/sup-{run}-{labeledfrac}-{unlabeledfrac}.npy"
