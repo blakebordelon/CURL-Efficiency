@@ -357,10 +357,10 @@ if __name__ == '__main__':
                             use_cuda=True,
                             download_dataset=True)
 
-    _, sup_acc = curltrainer.train(epochs=25, batch_size=4,  test_freq=10000, loss_freq=1000)
+    _, sup_acc = curltrainer.train(epochs=25, batch_size=5,  test_freq=2000, loss_freq=100)
     curltrainer.get_approximate_labels()
-    _, sims, conts = curltrainer.curltrain(epochs=10, batch_size=4, loss_freq=1000)
-    _, postcurl_acc = curltrainer.suptrain(epochs=5, batch_size=4,  test_freq=10000, loss_freq=1000)
+    _, sims, conts = curltrainer.curltrain(epochs=10, batch_size=5, loss_freq=100)
+    _, postcurl_acc = curltrainer.suptrain(epochs=5, batch_size=5,  test_freq=2000, loss_freq=100)
 
     supfile = f"CURL/STL10/plots/sup.npy"
     unsupfile = f"CURL/STL10/plots/unsup.npy"
