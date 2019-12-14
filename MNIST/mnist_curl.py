@@ -13,8 +13,8 @@ class CURL_NET(nn.Module):
         self.input_dim = input_dim
         self.out_dim = out_dim
         #self.conv1 = nn.Conv2d(input_dim, 6, 50)
-        self.lin1 = nn.Linear(input_dim, out_dim)
-        self.lin2 = nn.Linear(out_dim, out_dim)
+        self.lin1 = nn.Linear(input_dim, int(0.6*input_dim))
+        self.lin2 = nn.Linear(int(0.6*input_dim), out_dim)
         self.tanh = nn.Tanh()
         return
 
@@ -42,13 +42,13 @@ class Encoder(nn.Module):
         self.input_dim = input_dim
         self.out_dim = out_dim
         #self.conv1 = nn.Conv2d(input_dim, 6, 50)
-        self.lin1 = nn.Linear(input_dim, out_dim)
-        self.lin2 = nn.Linear(out_dim, out_dim)
+        self.lin1 = nn.Linear(input_dim, int(0.6*input_dim))
+        self.lin2 = nn.Linear(int(0.6*input_dim), out_dim)
         self.tanh = nn.Tanh()
         return
     def forward(self, x):
         x2 = self.tanh(self.lin1(x))
-        x3 = self.tanh(self.lin2(x2))
+        x3 = self.lin2(x2)
         return x3
 
 class Decoder(nn.Module):
@@ -70,11 +70,14 @@ class Decoder(nn.Module):
 
 class Train:
 
-    def __init__(self, block_size, k, lr = 2e-3, noise_size = 1e-4):
+    def __init__(self, block_size, k, lr = 1e-3, noise_size = 1e-4):
         self.x_train = []
         self.x_test = []
         self.y_train = []
         self.y_test = []
+        self.x_train_sup = []
+        self.y_train_sup = []
+        self.training_class_inds = []
         self.block_size = block_size
         self.k = k
         self.lr = lr
@@ -87,6 +90,22 @@ class Train:
         self.x_test = x_test
         self.y_train = y_train
         self.y_test = y_test
+        self.training_class_inds = []
+        min = 50000
+        for i in range(10):
+            arr = [j for j in range(len(y_train)) if y_train[j]==i]
+            if len(arr)<min:
+                min = len(arr)
+            self.training_class_inds.append(arr)
+        true_arr = np.zeros((10,min))
+        for i in range(10):
+            true_arr[i,:] = self.training_class_inds[i][0:min]
+        self.training_class_inds = true_arr
+        return
+
+    def set_supervised_data_set(self, x_train, y_train):
+        self.x_train_sup = x_train
+        self.y_train_sup = y_train
         return
 
     def sample_contrastive_noise(self):
@@ -109,6 +128,18 @@ class Train:
 
     def sample_contrastive_correct(self):
         c = np.random.randint(0,10, self.block_size)
+        min_count = self.training_class_inds.shape[1]
+        inds_indsx = np.random.randint(0,min_count,self.block_size)
+        inds_indsxp = np.random.randint(0, min_count, self.block_size)
+
+        x_inds = np.zeros(self.block_size).astype('int')
+        inds_xp = np.zeros(self.block_size).astype('int')
+        for i in range(self.block_size):
+            c_i = c[i]
+            x_inds[i] = self.training_class_inds[c_i,inds_indsx[i]]
+            inds_xp[i] = self.training_class_inds[c_i,inds_indsxp[i]]
+
+        """
         sort_inds = np.argsort(self.y_train)
         x_inds = np.random.randint(0, len(self.y_train), self.block_size)
         x_class = self.y_train[x_inds]
@@ -117,22 +148,24 @@ class Train:
             c = x_class[i]
             other_class_inds = [j for j in range(len(self.y_train)) if self.y_train[j] == c]
             inds_xp.append(other_class_inds[np.random.randint(len(other_class_inds))])
+        """
 
         #xp_inds = sort_inds[x_class*int(len(self.y_train)/10) + np.random.randint(0, int(len(self.y_train)/10), self.block_size)]
         #xp_inds = sort_inds[ x_class + np.random.randint(0, int(len(self.y_train)/10), self.block_size )]
         sample_mistakes = (self.y_train[x_inds] != self.y_train[inds_xp]).sum()
-        xk_inds = np.random.randint(0, len(self.y_train), self.block_size*self.k)
+        print(sample_mistakes)
+        xk_inds = np.random.randint(0, len(self.y_train), (self.block_size*self.k))
         x = torch.tensor(self.x_train[x_inds,:],dtype=torch.float)
         xp = torch.tensor(self.x_train[inds_xp,:],dtype=torch.float)
         xk = torch.tensor(self.x_train[xk_inds,:],dtype=torch.float)
         return x,xp,xk
 
     def sample_supervised_train(self):
-        num_train = len(self.y_train)
-        dim = self.x_train.shape[1]
+        num_train = len(self.y_train_sup)
+        dim = self.x_train_sup.shape[1]
         inds = np.random.randint(0, num_train, self.block_size)
-        x = torch.tensor(self.x_train[inds,:], dtype = torch.float)
-        y = torch.tensor(self.y_train[inds], dtype = torch.long)
+        x = torch.tensor(self.x_train_sup[inds,:], dtype = torch.float)
+        y = torch.tensor(self.y_train_sup[inds], dtype = torch.long)
         return x,y
 
     def sample_supervised_test(self):
@@ -146,7 +179,7 @@ class Train:
     def train_unsup(self, curl_net, num_iter):
 
         curl_net.train()
-        optimizer = optim.Adam(curl_net.parameters(), lr =1e-3)
+        optimizer = optim.Adam(curl_net.parameters(), lr = self.lr)
         avg_loss = 0
         losses = []
         for t in range(num_iter):
@@ -157,14 +190,19 @@ class Train:
             fxp = curl_net.forward(xp)
             fxm = curl_net.forward(xm)
             #print(fx.requires_grad)
-            F1 = fx.reshape((fx.shape[0], 1, fx.shape[1]))
-            F2 = fxp.reshape((fxp.shape[0], fxp.shape[1], 1))
-            #print(F1.requires_grad)
-            F3 = fxm.reshape((self.block_size, fxm.shape[1], self.k))
-            F12 = torch.bmm(F1,F2).squeeze().unsqueeze(-1).repeat(1,self.k) # should be a vector of batchsize
-            F13 = torch.bmm(F1,F3).squeeze() # should be a batchsize x k matrix
-            #loss = torch.log( torch.ones_like(F12) + torch.exp( 0.1 *(F13 - F12 + torch.ones_like(F13)) / curl_net.out_dim )).mean().mean()
-            loss = torch.log( torch.ones_like(F12) + torch.exp( (F13) / curl_net.out_dim )).mean().mean()
+            loss = 0
+            pos_prod = (fx * fxp).sum(-1)
+            fxrep = fx.repeat(self.k,1,1).permute(1,2,0)
+            fxmreshape = fxm.reshape(self.k, self.block_size, fx.shape[1])
+            neg_prods = (fxm.reshape(self.k, self.block_size, fx.shape[1]) * fx.repeat(self.k,1, 1)).sum(2)
+
+
+            # pos_prod is block-size ; neg_prods is k x block-size
+            pos_prod_rep = pos_prod.repeat(self.k, 1)
+            arg = torch.exp(neg_prods - pos_prod_rep).sum(0)
+            loss = 1/(self.block_size*self.k) * torch.log(torch.ones_like(arg) + arg).sum()
+
+            #loss = torch.log( torch.ones_like(F12) + torch.exp( (F13) / curl_net.out_dim )).mean().mean()
             #loss = torch.max(torch.zeros_like(F12), torch.ones_like(F12) + torch.max(F13-F12)).mean().mean()
             #print(loss.requires_grad)
             #print(loss.detach().numpy())
@@ -173,12 +211,14 @@ class Train:
             optimizer.zero_grad()
             loss_val = loss.detach().numpy()
             losses.append(loss_val)
+            print("CURL Loss: %lf" % loss_val)
+
+        plt.figure()
         plt.plot(losses)
         plt.title('CURL Training')
         plt.ylabel('CURL Loss')
         plt.xlabel('iterations')
         plt.savefig('unsup_loss.pdf')
-        plt.show()
         return curl_net
 
     def train_sup(self, curl_net, sup_net, num_iter):
@@ -203,12 +243,30 @@ class Train:
         print(error)
         return sup_net
 
+    def visualize(self, curl_net, name):
+        x = torch.tensor(self.x_test,dtype = torch.float)
+        x.requires_grad = False
+        fx = curl_net(x)
+        f_numpy = fx.detach().numpy()
+        u,s,vh = np.linalg.svd(f_numpy)
+        ind_sort = np.argsort(s)[::-1]
+        proj = f_numpy @ vh[ind_sort[0:2],:].T
+
+        plt.figure()
+        for i in range(10):
+            inds_i = [j for j in range(len(self.y_test)) if self.y_test[j]==i]
+            plt.scatter(proj[inds_i,0], proj[inds_i,1])
+        plt.savefig(name+'.pdf')
+        return
+
+
     def test_sup(self, curl_net, sup_net):
         curl_net.eval()
         sup_net.eval()
         x = torch.tensor(self.x_test, dtype = torch.float)
         y = torch.tensor(self.y_test, dtype = torch.long)
-        y_hat = sup_net.forward(curl_net.forward(x)).argmax(dim =1)
+        fx = curl_net.forward(x)
+        y_hat = sup_net.forward(fx).argmax(dim =1)
         error = (y_hat != y).sum().item() / y.shape[0]
         print("test error")
         print(error)
@@ -236,7 +294,7 @@ class Train:
         return sup_net, curl_net
 
 
-    def train_autoencoder_CURL(self, encoder, decoder, num_iter):
+    def train_autoencoder_CURL(self, encoder, decoder, num_iter, with_CURL = True):
         encoder.train()
         decoder.train()
         optimizer = optim.Adam(list(encoder.parameters()) + list(decoder.parameters()), lr = self.lr)
@@ -251,19 +309,27 @@ class Train:
             xmhat = decoder.forward(fxm)
 
             reconstruction_loss = 0
-            reconstruction_loss += (x-xhat).pow(2).mean().mean()
-            reconstruction_loss += (xphat-xp).pow(2).mean().mean()
-            reconstruction_loss += (xm-xmhat).pow(2).mean().mean()
+            reconstruction_loss += (x-xhat).pow(2).mean()
+            reconstruction_loss += (xphat-xp).pow(2).mean()
+            reconstruction_loss += (xm-xmhat).pow(2).mean()
 
-            F1 = fx.reshape((fx.shape[0], 1, fx.shape[1]))
-            F2 = fxp.reshape((fxp.shape[0], fxp.shape[1], 1))
-            F3 = fxm.reshape((self.block_size, fxm.shape[1], self.k))
-            F12 = torch.bmm(F1,F2).squeeze().unsqueeze(-1).repeat(1,self.k) # should be a vector of batchsize
-            F13 = torch.bmm(F1,F3).squeeze() # should be a batchsize x k matrix
-            loss = torch.log( torch.ones_like(F12) + torch.exp( (F13 - F12 + torch.ones_like(F12)) / curl_net.out_dim )).mean().mean()
+            loss = 0
+            pos_prod = (fx * fxp).sum(-1)
+            fxrep = fx.repeat(self.k,1,1).permute(1,2,0)
+            fxmreshape = fxm.reshape(self.k, self.block_size, fx.shape[1])
+            neg_prods = (fxm.reshape(self.k, self.block_size, fx.shape[1]) * fx.repeat(self.k,1, 1)).sum(2)
 
-            #total_loss = loss + reconstruction_loss
-            total_loss = reconstruction_loss
+
+            # pos_prod is block-size ; neg_prods is k x block-size
+            pos_prod_rep = pos_prod.repeat(self.k, 1)
+            arg = torch.exp(neg_prods - pos_prod_rep).sum(0)
+            loss = 1/(self.block_size*self.k) * torch.log(torch.ones_like(arg) + arg).sum()
+
+
+            total_loss = 0.5* reconstruction_loss
+            if with_CURL==True:
+                total_loss += loss
+            #total_loss = reconstruction_loss
             total_loss.backward()
             optimizer.step()
             optimizer.zero_grad()
@@ -275,10 +341,10 @@ class Train:
 
 image_shape = 28
 input_dim = image_shape**2
-output_dim = 250
-block_size = 25
+output_dim = 120
+block_size = 150
 k = 5
-num_iter = 120
+num_iter = 2000
 num_classes = 10
 
 
@@ -289,59 +355,96 @@ curl_net = CURL_NET(input_dim, output_dim)
 sup_net = SUP_NET(output_dim, num_classes)
 trainer = Train(block_size, k)
 
-M_vals = [len(y_train)]
-N_vals = [100, 500, 1000, 5000]
-errors = np.zeros((len(M_vals), len(N_vals)))
-for i in range(len(M_vals)):
-    for j in range(len(N_vals)):
-        m = M_vals[i]
-        n = N_vals[j]
-        inds_m = np.random.randint(0, len(y_train), m)
-        inds_n = np.random.randint(0, len(y_train), n)
+#M_vals = [int(0.1*len(y_train) ), int(0.25*len(y_train)),  int(1/2*len(y_train)), int(0.75 * len(y_train)) , len(y_train)]
+M_vals = [50, 100, 500, 1000, 5000, 10000, 20000, 50000]
+#N_vals = [100, 500, 1000, 5000]
+N_vals = [25, 100, 500, 1000]
+CURL_errors = np.zeros((len(M_vals), len(N_vals)))
+AE_errors = np.zeros(( len(M_vals), len(N_vals) ))
+RES_errors = np.zeros((len(M_vals), len(N_vals)))
+SUP_errors = np.zeros((len(M_vals), len(N_vals) ) )
 
-        trainer.set_data_set(x_train[inds_m,:], x_test, y_train[inds_m], y_test)
-        encoder = Encoder(input_dim, output_dim)
-        decoder = Decoder(output_dim, input_dim)
-        encoder, decoder = trainer.train_autoencoder_CURL(encoder, decoder, num_iter)
-        sup_net = SUP_NET(output_dim, num_classes)
-        print("calling train sup for autoencoder")
+
+for i in range(len(M_vals)):
+
+    m = M_vals[i]
+
+    inds_m = np.random.randint(0, len(y_train), m)
+    trainer.set_data_set(x_train[inds_m,:], x_test, y_train[inds_m], y_test)
+
+    # CURL + AE
+    encoder = Encoder(input_dim, output_dim)
+    decoder = Decoder(output_dim, input_dim)
+    trainer.visualize(encoder, 'autoencoder_before')
+    encoder, decoder = trainer.train_autoencoder_CURL(encoder, decoder, num_iter)
+    sup_net = SUP_NET(output_dim, num_classes)
+    print("calling train sup for autoencoder")
+
+    for j in range(len(N_vals)):
+        n = N_vals[j]
+        inds_n = np.random.randint(0, len(y_train), n)
+        trainer.set_supervised_data_set(x_train[inds_n,:], y_train[inds_n])
         sup_net = trainer.train_sup(encoder, sup_net, 1000)
         test_risk_ae = trainer.test_sup(encoder, sup_net)
+        trainer.visualize(encoder, 'autoencoder_after')
         print("test risk ae: %lf" % test_risk_ae)
-
-
-
-        curl_net = CURL_NET(input_dim, output_dim)
-        sup_net = SUP_NET(output_dim, num_classes)
-        trainer.set_data_set(x_train[inds_m,:], x_test, y_train[inds_m], y_test)
-        curl_net = trainer.train_unsup(curl_net, num_iter)
-        trainer.set_data_set(x_train[inds_n,:], x_test, y_train[inds_n], y_test)
-        sup_net = trainer.train_sup(curl_net, sup_net, 1000)
-        #sup_net, curl_net = trainer.train_pure_sup(curl_net, sup_net, 1000)
-        errors[i,j] = trainer.test_sup(curl_net, sup_net)
+        AE_errors[i,j] = test_risk_ae
 
         curl_net = CURL_NET(input_dim, output_dim)
-        sup_net = SUP_NET(output_dim, num_classes)
-        sup_net = trainer.train_sup(curl_net, sup_net, 1000)
-        error_sup_resevoir = trainer.test_sup(curl_net, sup_net)
-        print("error resevoir-supervised: %lf" % error_sup_resevoir )
-
-        curl_net = CURL_NET(input_dim, output_dim)
+        trainer.visualize(curl_net, 'pure_sup_before')
         sup_net = SUP_NET(output_dim, num_classes)
         sup_net, curl_net = trainer.train_pure_sup(curl_net, sup_net, 1000)
         error_sup_pure = trainer.test_sup(curl_net, sup_net)
+        trainer.visualize(curl_net, 'pure_sup_after')
+        SUP_errors[i,j] = error_sup_pure
         print("error pure supervised: %lf" % error_sup_pure )
 
+
+    # CURL TEST
+    curl_net = CURL_NET(input_dim, output_dim)
+    curl_net = trainer.train_unsup(curl_net, num_iter)
+    trainer.visualize(curl_net, 'curl_after')
+    for j in range(len(N_vals)):
+        n = N_vals[j]
+        inds_n = np.random.randint(0, len(y_train), n)
+        trainer.set_supervised_data_set(x_train[inds_n,:], y_train[inds_n])
+        sup_net = trainer.train_sup(curl_net, sup_net, 1000)
+        test_risk_curl = trainer.test_sup(curl_net, sup_net)
+        CURL_errors[i,j] = test_risk_curl
+
+
+
+plt.figure()
 for i in range(len(N_vals)):
-    plt.plot(M_vals, errors[:,i], label = 'N = %d' % N_vals[i])
-plt.title('no CURL Pretraining')
+    plt.semilogx(M_vals, CURL_errors[:,i], label = 'N = %d' % N_vals[i])
 plt.legend()
 plt.xlabel('M')
 plt.ylabel('Test Risk')
-plt.savefig('ground_truth_curl_pretraining.pdf')
-plt.show()
+plt.savefig('ground_truth_curl_pretraining_d%d.pdf' % output_dim)
 
-curl_net = CURL_NET(input_dim, output_dim)
-sup_net = SUP_NET(output_dim, num_classes)
-sup_net, curl_net = trainer.train_pure_sup(curl_net, sup_net, 1000)
-trainer.test_sup(curl_net, sup_net)
+
+plt.figure()
+for i in range(len(N_vals)):
+    plt.semilogx(M_vals, AE_errors[:,i], label = 'N = %d' % N_vals[i])
+plt.legend()
+plt.xlabel('M')
+plt.ylabel('Test Risk')
+plt.savefig('ground_truth_ae_pretraining_d%d.pdf' %output_dim)
+
+
+plt.figure()
+for i in range(len(N_vals)):
+    plt.semilogx(M_vals, SUP_errors[:,i] - CURL_errors[:,i], label = 'N = %d' % N_vals[i])
+plt.legend()
+plt.xlabel('M')
+plt.ylabel('Acc Boost From CURL')
+plt.savefig('curl_boost_d_%d.pdf' % output_dim)
+
+
+plt.figure()
+for i in range(len(N_vals)):
+    plt.semilogx(M_vals, SUP_errors[:,i] - AE_errors[:,i], label = 'N = %d' % N_vals[i])
+plt.legend()
+plt.xlabel('M')
+plt.ylabel('Acc Boost From CURL+AE')
+plt.savefig('ae_boost_d_%d.pdf' % output_dim)
