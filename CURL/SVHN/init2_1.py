@@ -101,7 +101,7 @@ if __name__ == '__main__':
                             unlabeled_indices=None,
                             combine=True,
                             use_cuda=True,
-                            download_dataset=False)
+                            download_dataset=True)
 
     _, sup_acc = curltrainer.train(epochs=800, batch_size=5,  test_freq=1000)
     curltrainer.get_approximate_labels()
