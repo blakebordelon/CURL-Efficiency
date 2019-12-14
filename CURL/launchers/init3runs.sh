@@ -1,3 +1,4 @@
+cd ../..
 python -m CURL.SVHN.init3_1
 python -m CURL.SVHN.init3_2
 python -m CURL.SVHN.init3_5

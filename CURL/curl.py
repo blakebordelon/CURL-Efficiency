@@ -263,6 +263,7 @@ class CURL():
                        labeled_indices=None,
                        unlabeled_indices=None,
                        combine=False,
+                       useall=False,
                        use_cuda=True,
                        download_dataset=True):
         """Initialize the CURL training class
@@ -331,6 +332,9 @@ class CURL():
             unlabeled images
         combine : bool
             Whether the labeled data should be contained as a subset of the unlabeled.
+        useall : bool
+            Whether to ignore the labeledfrac, unlabeledfrac, labeled_indices, unlabeled_indices
+            and just use all the data in the suptrainsplit and curltrainsplit.
         use_cuda : bool
             Whether to use CUDA or the cpu.
         download_dataset : bool
@@ -341,16 +345,19 @@ class CURL():
         -------
         None
         """
-        if labeledfrac + unlabeledfrac > 1.0:
-            print("Labeled fraction plus unlabeled fraction cannot exceed 1")
-            print("Setting to defaults")
-            if labeledfrac <= 1.0:
-                unlabeledfrac = 1.0 - labeledfrac
-                print(f"Set unlabeled frac to {unlabeledfrac}")
-            else:
-                labeledfrac, unlabeledfrac = 0.5, 0.5
-                print(f"Set labeled frac to {labeledfrac}")
-                print(f"Set unlabeled frac to {unlabeledfrac}")
+        if not useall:
+            if labeledfrac + unlabeledfrac > 1.0:
+                print("Labeled fraction plus unlabeled fraction cannot exceed 1")
+                print("Setting to defaults")
+                if labeledfrac <= 1.0:
+                    unlabeledfrac = 1.0 - labeledfrac
+                    print(f"Set unlabeled frac to {unlabeledfrac}")
+                else:
+                    labeledfrac, unlabeledfrac = 0.5, 0.5
+                    print(f"Set labeled frac to {labeledfrac}")
+                    print(f"Set unlabeled frac to {unlabeledfrac}")
+        else:
+            print("Using all data.")
 
         self.labeledfrac = labeledfrac
         self.unlabeledfrac = unlabeledfrac
@@ -386,46 +393,6 @@ class CURL():
         self.testset = self.Dataset(dataset_path, split=testsplit, transform=transform,
                                     download=download_dataset)
 
-        if labeled_indices is not None and unlabeled_indices is not None:
-            self.labeled_indices = labeled_indices
-            self.unlabeled_indices = unlabeled_indices
-        elif labeled_indices is not None and unlabeled_indices is None:
-            self.labeled_indices = labeled_indices
-            trainset_size = len(self.suptrainset)
-            indices = list(range(trainset_size))
-            indices = np.setdiff1d(indices, labeled_indices)
-            unlabeled_end = int(np.floor(unlabeledfrac * trainset_size))
-            if shuffle:
-                np.random.shuffle(indices)
-            self.unlabeled_indices = indices[:unlabeled_end]
-        elif labeled_indices is None and unlabeled_indices is not None:
-            self.unlabeled_indices = unlabeled_indices
-            trainset_size = len(self.suptrainset)
-            indices = list(range(trainset_size))
-            indices = np.setdiff1d(indices, unlabeled_indices)
-            labeled_end = int(np.floor(labeledfrac * trainset_size))
-            if shuffle:
-                np.random.shuffle(indices)
-            self.labeled_indices = indices[:labeled_end]
-        else:
-            trainset_size = len(self.suptrainset)
-            indices = list(range(trainset_size))
-            end = int(np.floor((unlabeledfrac+labeledfrac) * trainset_size))
-            labeled_end = int(np.floor(labeledfrac/(labeledfrac + unlabeledfrac) * end))
-            if shuffle:
-                np.random.shuffle(indices)
-            self.labeled_indices = indices[:labeled_end]
-            if combine:
-                self.unlabeled_indices = indices[:end]
-            else:
-                self.unlabeled_indices = indices[labeled_end:end]
-
-        print(f"Number of labeled images: {len(self.labeled_indices)}")
-        print(f"Number of unlabeled images: {len(self.unlabeled_indices)}")
-
-        self.suptrain_sampler = SubsetRandomSampler(self.labeled_indices)
-        self.curltrain_sampler = SubsetRandomSampler(self.unlabeled_indices)
-
         # Dynamically create the dataset subclass that will sample x, x+, x-
         ContrastedDataset = type("ContrastedDataset",
                                  (Dataset,),
@@ -443,6 +410,53 @@ class CURL():
                                               k=self.k,
                                               groundtruth=self.groundtruth
                                               )
+
+        if not useall:
+            if labeled_indices is not None and unlabeled_indices is not None:
+                self.labeled_indices = labeled_indices
+                self.unlabeled_indices = unlabeled_indices
+            elif labeled_indices is not None and unlabeled_indices is None:
+                self.labeled_indices = labeled_indices
+                trainset_size = len(self.suptrainset)
+                indices = list(range(trainset_size))
+                indices = np.setdiff1d(indices, labeled_indices)
+                unlabeled_end = int(np.floor(unlabeledfrac * trainset_size))
+                if shuffle:
+                    np.random.shuffle(indices)
+                self.unlabeled_indices = indices[:unlabeled_end]
+            elif labeled_indices is None and unlabeled_indices is not None:
+                self.unlabeled_indices = unlabeled_indices
+                trainset_size = len(self.suptrainset)
+                indices = list(range(trainset_size))
+                indices = np.setdiff1d(indices, unlabeled_indices)
+                labeled_end = int(np.floor(labeledfrac * trainset_size))
+                if shuffle:
+                    np.random.shuffle(indices)
+                self.labeled_indices = indices[:labeled_end]
+            else:
+                trainset_size = len(self.suptrainset)
+                indices = list(range(trainset_size))
+                end = int(np.floor((unlabeledfrac+labeledfrac) * trainset_size))
+                labeled_end = int(np.floor(labeledfrac/(labeledfrac + unlabeledfrac) * end))
+                if shuffle:
+                    np.random.shuffle(indices)
+                self.labeled_indices = indices[:labeled_end]
+                if combine:
+                    self.unlabeled_indices = indices[:end]
+                else:
+                    self.unlabeled_indices = indices[labeled_end:end]
+        else:
+            trainset_size = len(self.suptrainset)
+            self.labeled_indices = list(range(trainset_size))
+            curlset_size = len(self.curltrainset)
+            self.unlabeled_indices = list(range(curlset_size))
+
+        print(f"Number of labeled images: {len(self.labeled_indices)}")
+        print(f"Number of unlabeled images: {len(self.unlabeled_indices)}")
+
+        self.suptrain_sampler = SubsetRandomSampler(self.labeled_indices)
+        self.curltrain_sampler = SubsetRandomSampler(self.unlabeled_indices)
+
 
         self.bulk.to(self.device)
         self.head.to(self.device)
