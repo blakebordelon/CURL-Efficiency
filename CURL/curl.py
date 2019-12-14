@@ -527,7 +527,7 @@ class CURL():
         self.bulk.train()
         trainloader = torch.utils.data.DataLoader(self.curltrainset, batch_size=batch_size, sampler=self.curltrain_sampler, num_workers=4)
 
-        optimizer = optim.Adam(self.bulk.parameters(), lr=0.001)
+        optimizer = optim.Adam(self.bulk.parameters(), lr=0.0001)
         train_losses = []
         sims = []
         conts = []
