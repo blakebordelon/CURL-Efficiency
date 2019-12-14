@@ -29,7 +29,7 @@ class Net_Bulk(nn.Module):
         self.conv1 = nn.Conv2d(3, 6, 5)
         self.pool = nn.MaxPool2d(2, 2)
         self.conv2 = nn.Conv2d(6, 16, 5)
-        self.fc1 = nn.Linear(16*5*5,120)
+        self.fc1 = nn.Linear(16*5*5,80)
 
     def forward(self, x):
         x = self.pool(F.relu(self.conv1(x)))
@@ -42,7 +42,7 @@ class Net_Bulk(nn.Module):
 class Net_Head(nn.Module):
     def __init__(self):
         super(Net_Head, self).__init__()
-        self.fc2 = nn.Linear(120,40)
+        self.fc2 = nn.Linear(80,40)
         self.fc3 = nn.Linear(40,10)
         self.logsoftmax = nn.LogSoftmax(dim=-1)
 
@@ -229,7 +229,8 @@ class ApproxContrastedData(datasets.SVHN):
             templist = list(range(10))
             templist.remove(i)
             self.excludelabel.append(templist)
-        if transform is None:
+        self.transform = transform
+        if self.transform is None:
             print("Warning - a transform must be provided, at the very least transform.ToTensor()")
             print("After transformation, the result should be a tensor.")
 
@@ -258,7 +259,7 @@ class ApproxContrastedData(datasets.SVHN):
         simind = np.random.choice(self.byclass[approxlabel])
         img, targ = self.data[simind], int(self.labels[simind])
         img = Image.fromarray(np.transpose(img, (1, 2, 0)))
-        if self.transform is not None:
+        if self.contrast_transform is not None:
             img = self.contrast_transform(img)
         if self.target_transform is not None:
             targ = self.target_transform(targ)
@@ -336,11 +337,12 @@ class Train_CURL():
         trainset_size = len(self.suptrainset)
         indices = list(range(trainset_size))
         end = int(np.floor((curlfrac+supfrac) * trainset_size))
-        curlend = int(np.floor(curlfrac/(supfrac + curlfrac) * end))
+        supend = int(np.floor(supfrac/(supfrac + curlfrac) * end))
         if shuffle:
             np.random.shuffle(indices)
-        curltrain_indices = indices[:curlend]
-        suptrain_indices = indices[curlend:end]
+        suptrain_indices = indices[:supend]
+        curltrain_indices = indices[supend:end]
+        print(suptrain_indices)
 
         self.curltrain_indices = curltrain_indices
         print(f"Number of labeled images: {len(suptrain_indices)}")
@@ -349,7 +351,7 @@ class Train_CURL():
         self.curltrain_sampler = SubsetRandomSampler(curltrain_indices)
 
         #self.curltrainset = ContrastedData(svhn_path, split='train', accepted_indices=curltrain_indices, contrast_transform=contrasttrans, k=k, transform=transform, download=dload_dataset)
-        self.curltrainset = ApproxContrastedData(svhn_path, split='train', contrast_transform=contrasttrans, k=k, transform=normalize, download=dload_dataset)
+        self.curltrainset = ApproxContrastedData(svhn_path, split='train', contrast_transform=normalize, k=k, transform=normalize, download=dload_dataset)
 
         if use_cuda:
             if torch.cuda.is_available():
@@ -397,6 +399,16 @@ class Train_CURL():
         bnum = 0
         avgdist = torch.tensor(0., device=self.device)
         t = tqdm(leave=True, total=epochs*len(trainloader))
+
+        x=[]
+        cont_curve=[]
+        sim_curve=[]
+        plt.plot(x,cont_curve,'r')
+        plt.plot(x,sim_curve, 'b')
+        ax = plt.gca()
+        #ax.set_yscale('log')
+        #ax.set_xscale('log')
+        
         for epoch in range(epochs):
             for i, data in enumerate(trainloader):
                 # get the inputs; data is a list of [inputs, labels]
@@ -421,8 +433,12 @@ class Train_CURL():
                 # Hadamard product of f and f+, and f and all f-
                 # Then sum the last dimension, so we have computed f^t f+, and k of f^t f-
                 outputs2 = (outputs[:,0:1]*outputs[:,1:]).sum(-1)
+                # compute norms
+                #norms = torch.sqrt((outputs*outputs).sum(-1))
+                #sim = outputs2[:,0]/(norms[:,0]*norms[:,1])  # f^t f+
+                #contrast = (outputs2[:,1:]/(norms[:,0:1]*norms[:,2:])).sum(-1)  # sum of all f^t f-
                 sim = outputs2[:,0]  # f^t f+
-                contrast = outputs2[:,1:].sum(-1)  # sum of all f^t f-
+                contrast = (outputs2[:,1:]).sum(-1)  # sum of all f^t f-
 
                 #contrast = (outputs2[:,1:]*torch.where(approxtargets[:,2:]==approxtargets[:,0].unsqueeze(-1),torch.tensor(-1.,device = self.device),torch.tensor(1., device=self.device))).sum(-1)  # sum of all f^t f-
 
@@ -435,7 +451,8 @@ class Train_CURL():
                 #     plt.scatter(bnum,torch.mean((contrast/self.k).detach().cpu()).numpy(), c='r')
                 #     plt.scatter(bnum,torch.mean(sim.detach().cpu()).numpy(), c='b')
                 #     plt.pause(0.1)
-                minibatched_loss = self.softplus((contrast - sim)/outputs.shape[-1])
+                #minibatched_loss = self.softplus((contrast - sim)/outputs.shape[-1])
+                minibatched_loss = self.softplus((contrast - sim)/outputs.shape[-1] + 1.)
 
                 loss = torch.mean(minibatched_loss)
                 loss.backward()
@@ -445,10 +462,21 @@ class Train_CURL():
                 loss_val = loss.cpu().item()
                 if i % loss_freq == 0:
                     train_losses.append(loss_val)
+                    x.append(bnum)
+                    cont_curve.append(torch.mean(contrast.cpu()).item())
+                    sim_curve.append(torch.mean(sim.cpu()).item())
+                    plt.gca().lines[0].set_xdata(x)
+                    plt.gca().lines[0].set_ydata(cont_curve)
+                    plt.gca().lines[1].set_xdata(x)
+                    plt.gca().lines[1].set_ydata(sim_curve)
+                    plt.gca().relim()
+                    plt.gca().autoscale_view()
+                    plt.pause(0.05)
                 bnum += 1
                 t.update()
                 t.set_postfix(epoch=f'{epoch}/{epochs-1}', loss=f'{loss_val:.2e}')
         t.close()
+        plt.show()
         self.bulk.eval()
         #plt.show()
         return train_losses
@@ -586,7 +614,7 @@ if __name__ == '__main__':
 
     #trainsup = Train_Sup(svhn_path, frac=0.01, shuffle=True, augment=True, use_cuda=True)
     #trainsup.train(epochs=100, test_freq=2000)
-    traincurl = Train_CURL(svhn_path, curlfrac=0.04, supfrac=0.0015, k=5, shuffle=True, augment=True, use_cuda=True)
+    traincurl = Train_CURL(svhn_path, curlfrac=0.04, supfrac=0.0015, k=1, shuffle=False, augment=True, use_cuda=True)
     #for i in range(1):
     #    traincurl.train(epochs=30, batch_size=5,  test_freq=2000)
     #    traincurl.curltrain(epochs=1, batch_size=5)
@@ -596,8 +624,8 @@ if __name__ == '__main__':
     #_, postcurl_acc = traincurl.suptrain(epochs=10, batch_size=5,  test_freq=1000)
 
     _, sup_acc = traincurl.train(epochs=1000, batch_size=5,  test_freq=1000)
-    traincurl.curltrain(epochs=200, batch_size=5)
-    _, postcurl_acc = traincurl.suptrain(epochs=1000, batch_size=5,  test_freq=1000)
+    traincurl.curltrain(epochs=400, batch_size=5, loss_freq=400)
+    _, postcurl_acc = traincurl.suptrain(epochs=500, batch_size=5,  test_freq=1000)
 
     supfile = "plots/bimp-0015_2.npy"
     curlfile = "plots/bimp-04-0015_2.npy"
