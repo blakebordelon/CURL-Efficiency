@@ -6,7 +6,7 @@ import matplotlib
 fig, ax = plt.subplots(1,1)
 
 
-runs = 5
+runs = 8
 pathroot = '../plots/'
 pathtail = '.npy'
 tests = ['0.001-0.099',
@@ -34,16 +34,16 @@ unsupsd = np.std(allunsups, axis=-1)
 fractions = [0.01, 0.02, 0.05, 0.10, 0.20, 0.50, 1.0]
 
 ax.plot(fractions, supmean, c='C1', label="Supervised Only")
-ax.fill_between(fractions, supmean+supsd, supmean-supsd, color='C1', alpha=0.3)
+ax.fill_between(fractions, supmean+supsd, supmean-supsd, color='C1', alpha=0.2)
 
-#markers = ['o', '.', '+', 'x', '*']
+#markers = ['o', '.', '+', 'x', '*', '<', '4', 'P']
 #for n in range(runs):
 #    for i in range(len(tests)):
 #        ax.scatter(fractions[i], allsups[i, n], marker=markers[n], c='C1')
 #        ax.scatter(fractions[i], allunsups[i, n], marker=markers[n], c='C2')
 
 ax.plot(fractions, unsupmean, c='C2', label="Bootstrap CURL")
-ax.fill_between(fractions, unsupmean+unsupsd, unsupmean-unsupsd, color='C2', alpha=0.3)
+ax.fill_between(fractions, unsupmean+unsupsd, unsupmean-unsupsd, color='C2', alpha=0.2)
 
 ax.set_xscale('log')
 ax.set_xticks(fractions)

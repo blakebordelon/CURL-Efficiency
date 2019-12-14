@@ -57,9 +57,9 @@ svhn_path = '~/Downloads/Datasets/SVHN'
 
 if __name__ == '__main__':
 
-    run = '4'
-    labeledfrac = '0.010'
-    unlabeledfrac = '0.090'
+    run = '10'
+    labeledfrac = '0.020'
+    unlabeledfrac = '0.080'
 
     normalize = transforms.Compose(
                                    [transforms.ToTensor(),
