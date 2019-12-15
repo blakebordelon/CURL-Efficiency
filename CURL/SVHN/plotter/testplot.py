@@ -6,7 +6,7 @@ import matplotlib
 fig, ax = plt.subplots(1,1)
 
 
-runs = 8
+runs = 10
 pathroot = '../plots/'
 pathtail = '.npy'
 tests = ['0.001-0.099',

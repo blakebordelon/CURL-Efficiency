@@ -57,7 +57,7 @@ svhn_path = '~/Downloads/Datasets/SVHN'
 
 if __name__ == '__main__':
 
-    run = '8'
+    run = '9'
     labeledfrac = '0.005'
     unlabeledfrac = '0.095'
 
