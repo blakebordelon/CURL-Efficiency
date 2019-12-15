@@ -145,7 +145,7 @@ class ResNet_Bulk(nn.Module):
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2,
                                        dilate=replace_stride_with_dilation[2])
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        #self.fc = nn.Linear(512 * block.expansion, num_classes)
+        self.fc = nn.Linear(512 * block.expansion, 128 * block.expansion)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -201,8 +201,8 @@ class ResNet_Bulk(nn.Module):
 
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
+        x = self.fc(x)
         x = torch.tanh(x)  # Add this to restrict latent space to hypercube
-        #x = self.fc(x)
 
         return x
 
@@ -243,8 +243,9 @@ class ResNet_Head(nn.Module):
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2,
                                        dilate=replace_stride_with_dilation[2])
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        print(f'latentdim = {512*block.expansion}')
-        self.fc = nn.Linear(512 * block.expansion, num_classes)
+        print(f'latentdim = {128*block.expansion}')
+        self.fc2 = nn.Linear(128 * block.expansion, 40 * block.expansion)
+        self.fc3 = nn.Linear(40 * block.expansion, num_classes)
         self.logsoftmax = nn.LogSoftmax(dim=-1)
 
         for m in self.modules():
@@ -289,7 +290,9 @@ class ResNet_Head(nn.Module):
         return nn.Sequential(*layers)
 
     def _forward(self, x):
-        x = self.fc(x)
+        x = self.fc2(x)
+        x = torch.tanh(x)  
+        x = self.fc3(x)
         x = self.logsoftmax(x)
         return x
 
@@ -307,7 +310,7 @@ mysoftplus=nn.Softplus()
 def softplus(D):
     """ scaled softplus
     """
-    return mysoftplus(D/512)
+    return mysoftplus(D/128)
 
 stl10_path = '~/Downloads/Datasets/STL10'
 
@@ -359,10 +362,10 @@ if __name__ == '__main__':
                             use_cuda=True,
                             download_dataset=True)
 
-    _, sup_acc = curltrainer.train(epochs=25, batch_size=5,  test_freq=2000, loss_freq=100)
+    _, sup_acc = curltrainer.train(epochs=300, batch_size=5,  test_freq=2000, loss_freq=100)
     curltrainer.get_approximate_labels()
-    _, sims, conts = curltrainer.curltrain(epochs=10, batch_size=5, loss_freq=100)
-    _, postcurl_acc = curltrainer.suptrain(epochs=5, batch_size=5,  test_freq=2000, loss_freq=100)
+    _, sims, conts = curltrainer.curltrain(epochs=60, batch_size=5, loss_freq=100)
+    _, postcurl_acc = curltrainer.suptrain(epochs=100, batch_size=5,  test_freq=2000, loss_freq=100)
 
     supfile = f"CURL/STL10/plots/sup.npy"
     unsupfile = f"CURL/STL10/plots/unsup.npy"
