@@ -2,4 +2,4 @@
 
 Please refer to the [Project Proposal](CS281_Project_Proposal_initial.pdf)
 
-TODO
+and the [Final Report](CURL_Final_Report.pdf)
